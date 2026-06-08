@@ -1,0 +1,20 @@
+team_name: "your-team-name"
+primary_contact_name: "Your Name"
+primary_contact_email: "your@email.com"
+primary_contact_phone: "+91-xxxxxxxxxx"
+github_repository_url: "https://github.com/yourusername/recruiting-rank-ai"
+sandbox_link: "https://huggingface.co/spaces/yourusername/recruiting-rank-ai"
+ai_tools_declared:
+  - Claude
+  - ChatGPT
+  - Copilot
+compute_environment_summary: "Linux, 16GB RAM, CPU-only, Python 3.12"
+team_members:
+  - name: "Your Name"
+    email: "your@email.com"
+methodology_summary: >
+    6-dimension ranking system evaluating technical match (embeddings, vector DB, ranking, ML production),
+    semantic relevance (transferable skills), career quality (progression, product vs consulting),
+    behavioral signals (response rate, engagement), retention probability (tenure, notice period),
+    and risk assessment (honeypots, keyword stuffing). Precomputed 50+ features per candidate,
+    weighted scoring formula, honeypot detection at 0.6+ threshold.
