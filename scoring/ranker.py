@@ -1,11 +1,34 @@
+import json
+import os
+import pickle
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-from typing import Dict, List, Tuple
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
 
-from config import DIMENSION_WEIGHTS
+from config import (
+    DIMENSION_WEIGHTS,
+    SCORING,
+    BEHAVIORAL_WEIGHTS,
+    MODEL_CONFIG,
+    ENSEMBLE_WEIGHTS,
+    FAIRNESS_CONFIG,
+    MODEL_PATH,
+)
+from scoring.explainer import explain_ranking
+
+logger = logging.getLogger("rank.scoring")
 
 
-def compute_dimension_scores(features: Dict[str, float]) -> Dict[str, float]:
-    scores = {}
+def compute_dimension_scores(
+    features: Dict[str, float],
+    jd_weights: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    scores: Dict[str, float] = {}
+    t = SCORING["technical_match"]
 
     jd_dims = {
         "jd_match_embeddings": 3.0,
@@ -18,6 +41,13 @@ def compute_dimension_scores(features: Dict[str, float]) -> Dict[str, float]:
         "jd_match_distributed_systems": 1.0,
         "jd_match_data_engineering": 0.5,
     }
+
+    if jd_weights:
+        for dim in jd_dims:
+            jd_key = dim.replace("jd_match_", "")
+            if jd_key in jd_weights:
+                jd_dims[dim] = jd_weights[jd_key] * 5.0
+
     weighted_sum = 0.0
     total_weight = 0.0
     for dim, w in jd_dims.items():
@@ -28,121 +58,374 @@ def compute_dimension_scores(features: Dict[str, float]) -> Dict[str, float]:
     retrieval_boost = features.get("retrieval_depth", 0.0)
     ai_boost = features.get("ai_depth", 0.0)
     eval_boost = features.get("eval_depth", 0.0)
+    keyword_diversity = features.get("keyword_diversity", 0.0)
 
     depth_weighted = (
-        0.45 * min(retrieval_boost * 1.5, 1.0)
-        + 0.35 * min(ai_boost * 1.3, 1.0)
-        + 0.20 * min(eval_boost * 1.5, 1.0)
+        t["retrieval_subweight"]
+        * min(retrieval_boost * t["retrieval_boost_factor"], 1.0)
+        + t["ai_subweight"] * min(ai_boost * t["ai_boost_factor"], 1.0)
+        + t["eval_subweight"] * min(eval_boost * t["eval_boost_factor"], 1.0)
+        + t["diversity_subweight"] * keyword_diversity
     )
 
-    tech_match = 0.55 * core_tech_score + 0.45 * depth_weighted
+    tech_match = (
+        t["core_tech_weight"] * core_tech_score
+        + t["depth_weight"] * depth_weighted
+        + t["keyword_diversity_weight"] * keyword_diversity
+    )
+    tech_match = min(tech_match, 1.0)
+
+    tfidf_sim = features.get("tfidf_jd_similarity", 0.0)
+    tech_match = 0.90 * tech_match + 0.10 * tfidf_sim
     tech_match = min(tech_match, 1.0)
     scores["technical_match"] = tech_match
 
-    has_product = features.get("has_product_exp", 0.0)
+    s = SCORING["semantic_match"]
     is_consulting = features.get("entirely_consulting", 0.0)
-    consulting_penalty = is_consulting * 0.5
+    consulting_with_ml = features.get("consulting_with_ml", 0.0)
+    consulting_penalty = is_consulting * s["consulting_penalty"]
+    if consulting_with_ml:
+        consulting_penalty *= 1.0 - s["consulting_ml_credit"]
 
     retrieval_depth = features.get("retrieval_depth", 0.0)
     ai_depth = features.get("ai_depth", 0.0)
     eval_depth = features.get("eval_depth", 0.0)
 
-    semantic_transfer = max(retrieval_depth, ai_depth, eval_depth) * 0.6
-    exp_years = features.get("years_experience", 0.0)
-    exp_band = (
-        1.0 if 4.0 <= exp_years <= 10.0 else max(0.0, 1.0 - abs(exp_years - 7.0) / 10.0)
+    semantic_transfer = (
+        max(retrieval_depth, ai_depth, eval_depth) * s["transferable_weight"]
     )
+    exp_years = features.get("years_experience", 0.0)
+    center = s["ideal_exp_center"]
+    spread = center * 2.0
+    exp_band = max(0.0, 1.0 - abs(exp_years - center) / spread)
 
     semantic_match = max(
         0.0,
-        min(1.0, semantic_transfer + 0.2 * exp_band - consulting_penalty),
+        min(
+            1.0,
+            semantic_transfer + s["exp_band_weight"] * exp_band - consulting_penalty,
+        ),
     )
     scores["semantic_match"] = semantic_match
 
+    c = SCORING["career_quality"]
     progression = features.get("career_progression", 0.5)
     seniority = features.get("career_seniority", 0.5)
     has_product = features.get("has_product_exp", 0.0)
     is_consulting = features.get("entirely_consulting", 0.0)
+    prestige = features.get("company_prestige", 0.0)
+    growth_rate = features.get("growth_rate", 0.5)
 
     career_quality = (
-        0.35 * progression
-        + 0.25 * seniority
-        + 0.25 * has_product
-        - 0.15 * is_consulting
+        c["progression_weight"] * progression
+        + c["seniority_weight"] * seniority
+        + c["product_weight"] * has_product
+        + c["company_prestige_weight"] * prestige
+        + c["skill_growth_weight"] * growth_rate
+        - c["consulting_penalty"] * is_consulting
     )
     career_quality = max(0.0, min(1.0, career_quality))
     scores["career_quality"] = career_quality
 
-    beh_rr = features.get("beh_recruiter_response_rate", 0.0)
-    beh_icr = features.get("beh_interview_completion_rate", 0.0)
-    beh_otw = features.get("beh_open_to_work_flag", 0.0)
-    beh_saved = features.get("beh_saved_by_recruiters_30d", 0.0)
-    beh_search = features.get("beh_search_appearance_30d", 0.0)
-    beh_gh = features.get("beh_github_activity_score", 0.0)
-    beh_recent = features.get("beh_recent_activity", 0.0)
-    beh_completeness = features.get("beh_profile_completeness", 0.0)
-
-    behavioral_score = (
-        0.25 * beh_rr
-        + 0.15 * beh_icr
-        + 0.15 * beh_otw
-        + 0.10 * beh_saved
-        + 0.10 * beh_search
-        + 0.10 * beh_gh
-        + 0.10 * beh_recent
-        + 0.05 * beh_completeness
-    )
+    behavioral_score = 0.0
+    total_bw = 0.0
+    for key, weight in BEHAVIORAL_WEIGHTS.items():
+        val = features.get(f"beh_{key}", 0.0)
+        if val is None:
+            val = 0.0
+        behavioral_score += float(val) * weight
+        total_bw += weight
+    behavioral_score = behavioral_score / total_bw if total_bw > 0 else 0.0
     behavioral_score = max(0.0, min(1.0, behavioral_score))
     scores["behavioral"] = behavioral_score
 
-    retention_overall = features.get("ret_overall", 0.5)
-    notice_score = features.get("ret_notice_score", 0.5)
-    retention_score = 0.6 * retention_overall + 0.4 * notice_score
+    r = SCORING["retention"]
+    retention_overall = features.get("ret_overall", 0.5) or 0.5
+    notice_score = features.get("ret_notice_score", 0.5) or 0.5
+    tenure_score = features.get("ret_tenure_score", 0.5) or 0.5
+    retention_score = (
+        r["tenure_weight"] * retention_overall
+        + r["notice_weight"] * notice_score
+        + r["stability_weight"] * tenure_score
+    )
     retention_score = max(0.0, min(1.0, retention_score))
     scores["retention"] = retention_score
 
-    risk_score = features.get("risk_score", 0.0)
-    anti_patterns = features.get("anti_pattern_count", 0)
-    is_honeypot = features.get("is_honeypot", 0.0)
+    risk = SCORING["risk"]
+    risk_score = features.get("risk_score", 0.0) or 0.0
+    anti_patterns = features.get("anti_pattern_count", 0) or 0
+    is_honeypot = features.get("is_honeypot", 0.0) or 0.0
 
-    risk_penalty = risk_score * 0.5 + min(anti_patterns * 0.15, 0.3) + is_honeypot * 0.8
+    risk_penalty = (
+        risk["risk_score_penalty"] * risk_score
+        + min(
+            anti_patterns * risk["anti_pattern_penalty"],
+            risk["max_anti_pattern_penalty"],
+        )
+        + is_honeypot * risk["honeypot_penalty"]
+    )
     risk_penalty = min(risk_penalty, 1.0)
     risk_adjustment = 1.0 - risk_penalty
     scores["risk_adjustment"] = risk_adjustment
 
+    jd_sem_sim = features.get("tfidf_jd_similarity", 0.0)
+    scores["jd_semantic_similarity"] = jd_sem_sim
+
     return scores
 
 
-def compute_final_score(dim_scores: Dict[str, float]) -> float:
-    score = (
-        DIMENSION_WEIGHTS["technical_match"] * dim_scores.get("technical_match", 0.0)
-        + DIMENSION_WEIGHTS["semantic_match"] * dim_scores.get("semantic_match", 0.0)
-        + DIMENSION_WEIGHTS["career_quality"] * dim_scores.get("career_quality", 0.0)
-        + DIMENSION_WEIGHTS["behavioral"] * dim_scores.get("behavioral", 0.0)
-        + DIMENSION_WEIGHTS["retention"] * dim_scores.get("retention", 0.0)
-    )
-    risk_adj = dim_scores.get("risk_adjustment", 1.0)
+def compute_final_score(
+    dim_scores: Dict[str, float],
+    ml_score: Optional[float] = None,
+) -> float:
+    score = 0.0
+    for dim, weight in DIMENSION_WEIGHTS.items():
+        val = dim_scores.get(dim, 0.0)
+        if val is None:
+            val = 0.0
+        if weight > 0:
+            score += weight * float(val)
+        elif weight < 0:
+            score += weight * float(val)
+
+    risk_adj = float(dim_scores.get("risk_adjustment", 1.0) or 1.0)
     score = score * risk_adj
     score = max(0.0, min(100.0, score * 100.0))
+
+    if ml_score is not None:
+        ew = ENSEMBLE_WEIGHTS
+        score = ew["rule_based"] * score + ew["ml_prediction"] * ml_score * 100.0
+
     return score
 
 
 def rank_candidates(
     candidate_ids: List[str],
     features_list: List[Dict[str, float]],
+    jd_weights: Optional[Dict[str, float]] = None,
+    ml_model: Optional[Any] = None,
 ) -> List[Tuple[str, float, int, Dict[str, float]]]:
-    results = []
+    results: List[Tuple[str, float, Dict[str, float]]] = []
+    feature_vectors: List[List[float]] = []
+
     for cid, feats in zip(candidate_ids, features_list):
-        dim_scores = compute_dimension_scores(feats)
-        final_score = compute_final_score(dim_scores)
-        results.append((cid, final_score, dim_scores))
+        dim_scores = compute_dimension_scores(feats, jd_weights)
+        ml_score = None
+        if ml_model is not None:
+            vec = _features_to_vector(feats)
+            feature_vectors.append(vec)
+        else:
+            final_score = compute_final_score(dim_scores)
+            results.append((cid, final_score, dim_scores))
+
+    if ml_model is not None and feature_vectors:
+        ml_predictions = ml_model.predict(np.array(feature_vectors))
+        for i, (cid, _, dim_scores) in enumerate(results if results else []):
+            pass
+        results = []
+        for i, (cid, feats) in enumerate(zip(candidate_ids, features_list)):
+            dim_scores = compute_dimension_scores(feats, jd_weights)
+            ml_score = float(ml_predictions[i]) if i < len(ml_predictions) else None
+            if ml_score is not None:
+                ml_score = max(0.0, min(1.0, ml_score))
+            final_score = compute_final_score(dim_scores, ml_score)
+            results.append((cid, final_score, dim_scores))
 
     results.sort(key=lambda x: (-x[1], x[0]))
 
-    ranked = []
-    for rank, (cid, score, dims) in enumerate(results, start=1):
-        ranked.append((cid, score, rank, dims))
+    ranked: List[Tuple[str, float, int, Dict[str, float]]] = []
+    for rank_pos, (cid, score, dims) in enumerate(results, start=1):
+        ranked.append((cid, score, rank_pos, dims))
     return ranked
+
+
+def _features_to_vector(features: Dict[str, float]) -> List[float]:
+    keys = [
+        "years_experience",
+        "num_skills",
+        "expert_skills",
+        "num_career_entries",
+        "num_companies",
+        "ai_depth",
+        "retrieval_depth",
+        "eval_depth",
+        "career_progression",
+        "career_seniority",
+        "avg_tenure_months",
+        "skill_total_months",
+        "text_length",
+        "location_score",
+        "company_prestige",
+        "keyword_diversity",
+        "growth_rate",
+        "education_level",
+        "education_field",
+        "certifications",
+        "has_product_exp",
+        "entirely_consulting",
+    ]
+    vec = []
+    for key in keys:
+        val = features.get(key, 0.0)
+        if val is None:
+            val = 0.0
+        vec.append(float(val))
+    for dim in SCORING.get("technical_match", {}):
+        pass
+    return vec
+
+
+def train_model(
+    features_list: List[Dict[str, float]],
+    scores: Optional[List[float]] = None,
+    model_path: Optional[str] = None,
+) -> Any:
+    if not features_list:
+        logger.warning("No features for model training")
+        return None
+
+    X = np.array([_features_to_vector(f) for f in features_list])
+
+    if scores is not None and len(scores) == len(features_list):
+        y = np.array(scores)
+    else:
+        logger.info("No training scores provided, generating from rule-based scoring")
+        y = np.array(
+            [compute_final_score(compute_dimension_scores(f)) for f in features_list]
+        )
+
+    mc = MODEL_CONFIG
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=mc["test_size"], random_state=mc["random_state"]
+    )
+
+    model = RandomForestRegressor(
+        n_estimators=mc["n_estimators"],
+        max_depth=mc["max_depth"],
+        random_state=mc["random_state"],
+        n_jobs=-1,
+    )
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    logger.info("Model trained - MSE: %.4f, R2: %.4f", mse, r2)
+
+    save_path = model_path or MODEL_PATH
+    if save_path:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        with open(save_path, "wb") as f:
+            pickle.dump(model, f)
+        logger.info("Model saved to %s", save_path)
+
+    return model
+
+
+def load_model(model_path: str) -> Any:
+    if not os.path.exists(model_path):
+        logger.warning("Model not found at %s", model_path)
+        return None
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+    logger.info("Model loaded from %s", model_path)
+    return model
+
+
+def calibrate_scores(
+    ranked: List[Tuple[str, float, int, Dict[str, float]]],
+) -> List[Tuple[str, float, int, Dict[str, float]]]:
+    if not ranked:
+        return ranked
+    scores = [r[1] for r in ranked]
+    min_s = min(scores)
+    max_s = max(scores)
+    if max_s - min_s < 0.01:
+        return ranked
+
+    calibrated: List[Tuple[str, float, int, Dict[str, float]]] = []
+    for cid, score, rank_pos, dims in ranked:
+        normalized = (score - min_s) / (max_s - min_s)
+        calibrated_score = normalized * 100.0
+        calibrated.append((cid, calibrated_score, rank_pos, dims))
+    return calibrated
+
+
+def audit_fairness(
+    ranked: List[Tuple[str, float, int, Dict[str, float]]],
+    features_list: List[Dict[str, float]],
+    candidate_ids: List[str],
+) -> Dict[str, Any]:
+    fc = FAIRNESS_CONFIG
+    if not fc["audit_enabled"]:
+        return {"audit_enabled": False}
+
+    id_to_feats = dict(zip(candidate_ids, features_list))
+    groups: Dict[str, List[str]] = {
+        "consulting": [],
+        "non_consulting": [],
+        "high_prestige": [],
+        "low_prestige": [],
+        "high_location": [],
+        "low_location": [],
+    }
+
+    for cid, _score, _rank, _dims in ranked:
+        feats = id_to_feats.get(cid, {}) or {}
+        if feats.get("entirely_consulting", 0.0) > 0.5:
+            groups["consulting"].append(cid)
+        else:
+            groups["non_consulting"].append(cid)
+        if feats.get("company_prestige", 0.0) >= 0.7:
+            groups["high_prestige"].append(cid)
+        else:
+            groups["low_prestige"].append(cid)
+        if feats.get("location_score", 0.0) >= 0.7:
+            groups["high_location"].append(cid)
+        else:
+            groups["low_location"].append(cid)
+
+    dims_to_audit = fc["dimensions_to_audit"]
+    id_to_dims: Dict[str, Dict[str, float]] = {}
+    for cid, _score, _rank, dims in ranked:
+        id_to_dims[cid] = dims
+
+    disparities: Dict[str, Any] = {}
+    for group_name, (advantaged_key, disadvantaged_key) in [
+        ("consulting", ("non_consulting", "consulting")),
+        ("prestige", ("high_prestige", "low_prestige")),
+        ("location", ("high_location", "low_location")),
+    ]:
+        group_disparities = {}
+        for dim in dims_to_audit:
+            adv_scores = [
+                id_to_dims[cid].get(dim, 0.0)
+                for cid in groups[advantaged_key]
+                if cid in id_to_dims
+            ]
+            disadv_scores = [
+                id_to_dims[cid].get(dim, 0.0)
+                for cid in groups[disadvantaged_key]
+                if cid in id_to_dims
+            ]
+            if adv_scores and disadv_scores:
+                adv_mean = np.mean(adv_scores)
+                disadv_mean = np.mean(disadv_scores)
+                disparity = adv_mean - disadv_mean if adv_mean > 0 else 0.0
+                group_disparities[dim] = {
+                    "advantaged_mean": float(round(adv_mean, 4)),
+                    "disadvantaged_mean": float(round(disadv_mean, 4)),
+                    "disparity": float(round(disparity, 4)),
+                    "flagged": disparity > fc["disparity_threshold"],
+                }
+        disparities[group_name] = group_disparities
+
+    return {
+        "audit_enabled": True,
+        "disparity_threshold": fc["disparity_threshold"],
+        "group_sizes": {k: len(v) for k, v in groups.items()},
+        "disparities": disparities,
+    }
 
 
 def generate_reasoning(
@@ -151,51 +434,74 @@ def generate_reasoning(
     rank: int,
     dim_scores: Dict[str, float],
     features: Dict[str, float],
+    with_explanation: bool = False,
 ) -> str:
-    parts = []
+    parts: List[str] = []
 
-    tech = dim_scores.get("technical_match", 0.0)
-    beh = dim_scores.get("behavioral", 0.0)
-    risk = dim_scores.get("risk_adjustment", 1.0)
-
+    tech = dim_scores.get("technical_match", 0.0) or 0.0
     if tech > 0.5:
-        retrieval = features.get("retrieval_depth", 0.0)
+        retrieval = features.get("retrieval_depth", 0.0) or 0.0
         if retrieval > 0.2:
-            parts.append(f"Strong retrieval/vector search background")
+            parts.append("Strong retrieval/vector search background")
         else:
-            ai_d = features.get("ai_depth", 0.0)
+            ai_d = features.get("ai_depth", 0.0) or 0.0
             if ai_d > 0.2:
-                parts.append(f"Solid ML/AI engineering experience")
+                parts.append("Solid ML/AI engineering experience")
             else:
-                parts.append(f"Relevant technical background")
+                parts.append("Relevant technical background")
     elif tech > 0.25:
-        parts.append(f"Adjacent technical skills")
+        parts.append("Adjacent technical skills")
     else:
-        is_consulting = features.get("entirely_consulting", 0.0)
-        if is_consulting:
-            parts.append(f"Consulting background, limited product ML experience")
+        if features.get("entirely_consulting", 0.0):
+            parts.append("Consulting background, limited product ML experience")
+        elif features.get("keyword_diversity", 0.0) < 0.2:
+            parts.append("Narrow technical scope")
         else:
-            parts.append(f"Weak technical match to JD")
+            parts.append("Weak technical match to JD")
 
+    beh = dim_scores.get("behavioral", 0.0) or 0.0
     if beh > 0.7:
-        parts.append(f"highly engaged on platform")
+        parts.append("highly engaged on platform")
     elif beh > 0.4:
-        parts.append(f"moderate engagement")
+        parts.append("moderate engagement")
     else:
-        parts.append(f"low platform activity")
+        parts.append("low platform activity")
 
-    exp = features.get("years_experience", 0)
+    exp = features.get("years_experience", 0) or 0
     parts.append(f"{exp:.1f}yr exp")
 
-    risk_score = features.get("risk_score", 0.0)
+    edu_level = features.get("education_level", 0.0) or 0.0
+    if edu_level > 0.8:
+        parts.append("PhD")
+    elif edu_level > 0.5:
+        parts.append("Masters")
+    elif edu_level > 0.2:
+        parts.append("Bachelors")
+
+    prestige = features.get("company_prestige", 0.0) or 0.0
+    if prestige >= 1.0:
+        parts.append("top-tier company experience")
+    elif prestige >= 0.7:
+        parts.append("strong company background")
+
+    certs = features.get("certifications", 0) or 0
+    if certs > 0:
+        parts.append(f"{int(certs)} cert(s)")
+
+    for key in features:
+        if key.startswith("skill_cat_") and (features[key] or 0) > 0:
+            cat = key.replace("skill_cat_", "").replace("_", " ")
+            parts.append(cat)
+
+    risk_score = features.get("risk_score", 0.0) or 0.0
     if risk_score > 0.3:
-        parts.append(f"risk flags detected")
-    anti = features.get("anti_pattern_count", 0)
+        parts.append("risk flags detected")
+
+    anti = features.get("anti_pattern_count", 0) or 0
     if anti > 0:
-        parts.append(f"buzzword concern")
+        parts.append("buzzword concern")
 
     if features.get("is_honeypot", 0.0) > 0.5:
-        parts.append(f"HONEYPOT")
+        parts.append("HONEYPOT")
 
-    reasoning = "; ".join(parts) if parts else "No strong signals"
-    return reasoning
+    return "; ".join(parts) if parts else "No strong signals"

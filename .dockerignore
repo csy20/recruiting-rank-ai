@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.git
+.gitignore
+*.md
+tests/
+data/*.npz
+data/*.csv
+submission.csv
