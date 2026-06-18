@@ -157,9 +157,7 @@ JD_KEYWORDS = {
     },
 }
 
-TFIDF_ENABLED = True
-TFIDF_MAX_FEATURES = 1000
-TFIDF_NGRAM_RANGE = (1, 2)
+SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
 
 BEHAVIORAL_WEIGHTS = {
     "recruiter_response_rate": 0.20,
@@ -275,7 +273,7 @@ MODEL_CONFIG = {
 ENSEMBLE_WEIGHTS = {
     "rule_based": 0.60,
     "ml_prediction": 0.25,
-    "tfidf_semantic": 0.15,
+    "semantic_similarity": 0.15,
 }
 
 FAIRNESS_CONFIG = {
@@ -317,7 +315,7 @@ def _load_yaml_overrides():
         if not overrides:
             return
 
-        global REFERENCE_DATE, TFIDF_ENABLED, TFIDF_MAX_FEATURES, TFIDF_NGRAM_RANGE
+        global REFERENCE_DATE, SENTENCE_TRANSFORMER_MODEL
         global MODEL_CONFIG, ENSEMBLE_WEIGHTS, FAIRNESS_CONFIG, API_CONFIG
         global DIMENSION_WEIGHTS, SCORING, BEHAVIORAL_WEIGHTS
 
@@ -325,14 +323,8 @@ def _load_yaml_overrides():
             from datetime import datetime as _dt
 
             REFERENCE_DATE = _dt.strptime(overrides["reference_date"], "%Y-%m-%d").date()
-        if "tfidf" in overrides:
-            t = overrides["tfidf"]
-            if "enabled" in t:
-                TFIDF_ENABLED = bool(t["enabled"])
-            if "max_features" in t:
-                TFIDF_MAX_FEATURES = int(t["max_features"])
-            if "ngram_range" in t:
-                TFIDF_NGRAM_RANGE = tuple(t["ngram_range"])
+        if "sentence_transformer" in overrides:
+            SENTENCE_TRANSFORMER_MODEL = str(overrides["sentence_transformer"])
         if "model" in overrides:
             MODEL_CONFIG.update(overrides["model"])
         if "ensemble_weights" in overrides:

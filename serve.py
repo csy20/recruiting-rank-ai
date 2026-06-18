@@ -11,7 +11,7 @@ from pydantic import BaseModel, field_validator
 
 from config import API_CONFIG, API_HOST, API_PORT
 from features.extractor import extract_all_features
-from rank import _compute_tfidf_features, _get_candidate_text
+from rank import _compute_semantic_features, _get_candidate_text
 from scoring.explainer import explain_ranking
 from scoring.jd_parser import get_jd_dimension_weights, parse_jd
 from scoring.ranker import (
@@ -121,10 +121,10 @@ def rank_endpoint(req: RankRequest):
             jd_profile.get("experience_years"),
         )
         candidate_texts = [_get_candidate_text(c) for c in req.candidates]
-        tfidf_scores = _compute_tfidf_features(req.candidates, candidate_texts, req.jd_text)
-        for i, sim in enumerate(tfidf_scores):
+        semantic_scores = _compute_semantic_features(req.candidates, candidate_texts, req.jd_text)
+        for i, sim in enumerate(semantic_scores):
             if i < len(all_features):
-                all_features[i]["tfidf_jd_similarity"] = sim
+                all_features[i]["semantic_similarity"] = sim
 
     ranked = rank_candidates(ids, all_features, jd_weights=jd_weights, ml_model=_ml_model)
     ranked = calibrate_scores(ranked)

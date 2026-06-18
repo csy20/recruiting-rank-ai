@@ -62,8 +62,8 @@ def _compute_technical_match(
     )
     tech_match = min(tech_match, 1.0)
 
-    tfidf_sim = features.get("tfidf_jd_similarity", 0.0)
-    tech_match = 0.90 * tech_match + 0.10 * tfidf_sim
+    sem_sim = features.get("semantic_similarity", 0.0)
+    tech_match = 0.90 * tech_match + 0.10 * sem_sim
     return min(tech_match, 1.0)
 
 
@@ -162,7 +162,7 @@ def compute_dimension_scores(
         "behavioral": _compute_behavioral(features),
         "retention": _compute_retention(features),
         "risk_adjustment": _compute_risk_adjustment(features),
-        "jd_semantic_similarity": features.get("tfidf_jd_similarity", 0.0),
+        "jd_semantic_similarity": features.get("semantic_similarity", 0.0),
     }
 
 
@@ -253,9 +253,21 @@ def _features_to_vector(features: dict[str, float]) -> list[float]:
     return vec
 
 
+def _build_hireability_target(signals: dict) -> float:
+    """Behavioral outcome composite as training target (not circular)."""
+    oar = signals.get("offer_acceptance_rate", -1)
+    icr = signals.get("interview_completion_rate", 0.5)
+    saved = min(signals.get("saved_by_recruiters_30d", 0) / 10.0, 1.0)
+    rrr = signals.get("recruiter_response_rate", 0.5)
+    active = 1.0 if signals.get("open_to_work_flag", False) else 0.4
+    oar_score = oar if oar >= 0 else 0.5
+    return 0.30 * oar_score + 0.25 * icr + 0.20 * saved + 0.15 * rrr + 0.10 * active
+
+
 def train_model(
     features_list: list[dict[str, float]],
     scores: list[float] | None = None,
+    signals_list: list[dict] | None = None,
     model_path: str | None = None,
 ) -> Any:
     if not features_list:
@@ -266,9 +278,12 @@ def train_model(
 
     if scores is not None and len(scores) == len(features_list):
         y = np.array(scores)
+    elif signals_list is not None and len(signals_list) == len(features_list):
+        logger.info("Building hireability targets from behavioral signals")
+        y = np.array([_build_hireability_target(s) for s in signals_list])
     else:
-        logger.info("No training scores provided, generating from rule-based scoring")
-        y = np.array([compute_final_score(compute_dimension_scores(f)) for f in features_list])
+        logger.warning("No training targets available (provide scores or signals_list)")
+        return None
 
     mc = MODEL_CONFIG
     X_train, X_test, y_train, y_test = train_test_split(

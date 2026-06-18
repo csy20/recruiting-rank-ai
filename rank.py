@@ -10,15 +10,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from config import (
     JD_KEYWORDS,
     OUTPUT_PATH,
-    TFIDF_ENABLED,
-    TFIDF_MAX_FEATURES,
-    TFIDF_NGRAM_RANGE,
+    SENTENCE_TRANSFORMER_MODEL,
 )
 from features.extractor import _get_combined_text, extract_all_features, load_candidates
 from scoring.explainer import explain_ranking
@@ -72,33 +69,29 @@ def _get_candidate_text(candidate: dict[str, Any]) -> str:
     return _get_combined_text(candidate)
 
 
-@functools.lru_cache(maxsize=2)
-def _get_tfidf_vectorizer(jd_text: str):
-    vectorizer = TfidfVectorizer(
-        max_features=TFIDF_MAX_FEATURES,
-        ngram_range=TFIDF_NGRAM_RANGE,
-        stop_words="english",
-        sublinear_tf=True,
-    )
-    vectorizer.fit([jd_text])
-    return vectorizer
+@functools.lru_cache(maxsize=1)
+def _get_sentence_transformer():
+    from sentence_transformers import SentenceTransformer
+
+    logger.info("Loading sentence-transformer model: %s", SENTENCE_TRANSFORMER_MODEL)
+    return SentenceTransformer(SENTENCE_TRANSFORMER_MODEL)
 
 
-def _compute_tfidf_features(
+def _compute_semantic_features(
     candidates: list[dict[str, Any]],
     all_texts: list[str],
     jd_text: str,
 ) -> list[float]:
-    logger.info("Computing TF-IDF features (%d candidates)...", len(all_texts))
+    logger.info("Computing semantic similarity features (%d candidates)...", len(all_texts))
     if not all_texts:
         return []
-    vectorizer = _get_tfidf_vectorizer(jd_text)
-    jd_vec = vectorizer.transform([jd_text])
-    candidate_vecs = vectorizer.transform(all_texts)
-    similarities = cosine_similarity(candidate_vecs, jd_vec).flatten()
+    model = _get_sentence_transformer()
+    jd_emb = model.encode([jd_text], show_progress_bar=False)
+    candidate_embs = model.encode(all_texts, show_progress_bar=False)
+    similarities = cosine_similarity(candidate_embs, jd_emb).flatten()
     if len(similarities) > 0:
         logger.info(
-            "TF-IDF similarity range: [%.4f, %.4f]",
+            "Semantic similarity range: [%.4f, %.4f]",
             float(similarities.min()),
             float(similarities.max()),
         )
@@ -171,12 +164,12 @@ def precompute(
         all_features.append(feats)
 
     jd_text = _load_jd_text(jd_path) if jd_path else _build_jd_text()
-    if TFIDF_ENABLED and jd_text:
+    if jd_text:
         candidate_texts = [_get_candidate_text(c) for c in candidates]
-        tfidf_scores = _compute_tfidf_features(candidates, candidate_texts, jd_text)
-        for i, sim in enumerate(tfidf_scores):
+        semantic_scores = _compute_semantic_features(candidates, candidate_texts, jd_text)
+        for i, sim in enumerate(semantic_scores):
             if i < len(all_features):
-                all_features[i]["tfidf_jd_similarity"] = sim
+                all_features[i]["semantic_similarity"] = sim
 
     if not all_features:
         logger.warning("No features extracted!")
@@ -205,8 +198,9 @@ def precompute(
     logger.info("Saved metadata to %s", meta_path)
 
     if train:
-        logger.info("Training ML model on rule-based scores...")
-        train_model(all_features, model_path=None)
+        logger.info("Training ML model on behavioral signals...")
+        signals_list = [c.get("redrob_signals", {}) for c in candidates]
+        train_model(all_features, signals_list=signals_list, model_path=None)
 
     logger.info("Precomputation done in %.1fs total", time.time() - t0)
 
@@ -273,19 +267,19 @@ def rank(
         logger.warning("No features available for ranking!")
         return
 
-    if TFIDF_ENABLED:
-        ref_text = jd_text_loaded or _build_jd_text()
-        if ref_text and "tfidf_jd_similarity" not in all_features[0]:
-            candidate_texts = [_get_candidate_text(c) for c in candidates]
-            tfidf_scores = _compute_tfidf_features(candidates, candidate_texts, ref_text)
-            for i, sim in enumerate(tfidf_scores):
-                if i < len(all_features):
-                    all_features[i]["tfidf_jd_similarity"] = sim
+    ref_text = jd_text_loaded or _build_jd_text()
+    if ref_text and "semantic_similarity" not in all_features[0]:
+        candidate_texts = [_get_candidate_text(c) for c in candidates]
+        semantic_scores = _compute_semantic_features(candidates, candidate_texts, ref_text)
+        for i, sim in enumerate(semantic_scores):
+            if i < len(all_features):
+                all_features[i]["semantic_similarity"] = sim
 
     ml_model = load_model(model_path) if model_path and os.path.exists(model_path) else None
     if model_path and ml_model is None:
-        logger.info("No pre-trained model found, training from rule-based scores...")
-        ml_model = train_model(all_features, model_path=model_path)
+        logger.info("No pre-trained model found, training from behavioral signals...")
+        signals_list = [c.get("redrob_signals", {}) for c in candidates]
+        ml_model = train_model(all_features, signals_list=signals_list, model_path=model_path)
 
     logger.info("Ranking candidates...")
     ids = [c.get("candidate_id") or str(i) for i, c in enumerate(candidates)]

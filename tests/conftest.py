@@ -107,7 +107,7 @@ def sample_features():
         "certifications": 1.0,
         "text_length": 500,
         "location_score": 1.0,
-        "tfidf_jd_similarity": 0.0,
+        "semantic_similarity": 0.0,
     }
 
 

@@ -66,8 +66,8 @@ def compute_feature_contributions(
     anti = features.get("anti_pattern_count", 0)
     contributions["risk_penalty_detail"] = round(-(risk_score * 20.0 + anti * 3.0), 2)
 
-    tfidf = features.get("tfidf_jd_similarity", 0.0)
-    contributions["semantic_similarity"] = round(tfidf * 10.0, 2)
+    sem_val = features.get("semantic_similarity", 0.0)
+    contributions["semantic_similarity"] = round(sem_val * 10.0, 2)
 
     total = sum(v for v in contributions.values() if v > 0)
     if total > 0:

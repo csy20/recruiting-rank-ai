@@ -39,7 +39,7 @@ class TestFullPipeline:
         assert len(jd_weights) > 0
 
         features = extract_all_features(sample_candidate)
-        features["tfidf_jd_similarity"] = 0.5
+        features["semantic_similarity"] = 0.5
 
         ranked = rank_candidates(
             [sample_candidate["candidate_id"]], [features], jd_weights=jd_weights

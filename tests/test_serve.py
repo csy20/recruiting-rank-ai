@@ -62,7 +62,11 @@ class TestRankEndpoint:
         assert "score" in data["results"][0]
         assert "metadata" in data
 
-    def test_with_jd_text(self):
+    def test_with_jd_text(self, monkeypatch):
+        monkeypatch.setattr(
+            "serve._compute_semantic_features",
+            lambda c, t, j: [0.5] * len(c),
+        )
         payload = {
             "candidates": [SAMPLE_CANDIDATE],
             "jd_text": "Requirements: Python, PyTorch, embeddings, "
