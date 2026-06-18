@@ -42,7 +42,7 @@ dimension_weights:
   career_quality: 0.10
   behavioral: 0.15
   retention: 0.10
-  risk_adjustment: -0.05
+  risk_adjustment: 0.0
   jd_semantic_similarity: 0.10
 
 scoring:

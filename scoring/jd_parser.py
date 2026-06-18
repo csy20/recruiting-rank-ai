@@ -1,6 +1,6 @@
 import re
-from typing import Any, Dict, List, Optional, Tuple
 from collections import Counter
+from typing import Any
 
 from config import JD_KEYWORDS
 from utils.nlp_utils import (
@@ -8,7 +8,6 @@ from utils.nlp_utils import (
     count_pattern_matches,
     extract_technical_terms,
 )
-
 
 _SECTION_PATTERNS = {
     "about": re.compile(r"(about|overview|summary|intro)", re.IGNORECASE),
@@ -32,6 +31,10 @@ _SECTION_PATTERNS = {
     ),
 }
 
+_JD_KEYWORD_PATTERNS: dict[str, list[Any]] = {
+    dim: compile_keyword_patterns(cfg["terms"]) for dim, cfg in JD_KEYWORDS.items()
+}
+
 _EXPERIENCE_PATTERNS = [
     re.compile(r"(\d+)\+?\s*years?\s*(of\s*)?(experience|work)"),
     re.compile(r"(\d+)\s*-\s*(\d+)\s*years?"),
@@ -39,7 +42,7 @@ _EXPERIENCE_PATTERNS = [
 ]
 
 
-def parse_jd(jd_text: str) -> Dict[str, Any]:
+def parse_jd(jd_text: str) -> dict[str, Any]:
     if not jd_text:
         return {
             "keywords": {},
@@ -58,7 +61,7 @@ def parse_jd(jd_text: str) -> Dict[str, Any]:
 
     dimension_scores = {}
     for dim, cfg in JD_KEYWORDS.items():
-        patterns = compile_keyword_patterns(cfg["terms"])
+        patterns = _JD_KEYWORD_PATTERNS[dim]
         req_matches = count_pattern_matches(sections.get("requirements", ""), patterns)
         pref_matches = count_pattern_matches(sections.get("preferred", ""), patterns)
         all_matches = count_pattern_matches(jd_text, patterns)
@@ -89,11 +92,11 @@ def parse_jd(jd_text: str) -> Dict[str, Any]:
     }
 
 
-def _split_sections(text: str) -> Dict[str, str]:
+def _split_sections(text: str) -> dict[str, str]:
     lines = text.split("\n")
-    sections: Dict[str, str] = {}
+    sections: dict[str, str] = {}
     current_section = "about"
-    current_lines: List[str] = []
+    current_lines: list[str] = []
 
     for line in lines:
         line_stripped = line.strip()
@@ -118,7 +121,7 @@ def _split_sections(text: str) -> Dict[str, str]:
     return sections
 
 
-def _extract_section_terms(text: str) -> Dict[str, float]:
+def _extract_section_terms(text: str) -> dict[str, float]:
     if not text:
         return {}
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.\-]{2,}", text.lower())
@@ -129,7 +132,7 @@ def _extract_section_terms(text: str) -> Dict[str, float]:
     return {word: count / total for word, count in counts.most_common(30)}
 
 
-def _extract_experience_range(text: str) -> Tuple[float, float]:
+def _extract_experience_range(text: str) -> tuple[float, float]:
     matches = []
     for pattern in _EXPERIENCE_PATTERNS:
         for match in pattern.finditer(text):
@@ -155,7 +158,7 @@ def _extract_experience_range(text: str) -> Tuple[float, float]:
     return (min_years, max_years)
 
 
-def get_jd_dimension_weights(jd_profile: Dict[str, Any]) -> Dict[str, float]:
+def get_jd_dimension_weights(jd_profile: dict[str, Any]) -> dict[str, float]:
     dim_analysis = jd_profile.get("dimension_analysis", {})
     weights = {}
     for dim, info in dim_analysis.items():
@@ -167,10 +170,9 @@ def get_jd_dimension_weights(jd_profile: Dict[str, Any]) -> Dict[str, float]:
     return {k: v / total for k, v in weights.items()}
 
 
-def get_jd_experience_score(exp_years: float, jd_profile: Dict[str, Any]) -> float:
+def get_jd_experience_score(exp_years: float, jd_profile: dict[str, Any]) -> float:
     exp_range = jd_profile.get("experience_years", (0.0, 20.0))
     min_exp, max_exp = exp_range
-    mid = (min_exp + max_exp) / 2
     spread = max(max_exp - min_exp, 1.0)
 
     if min_exp <= exp_years <= max_exp:

@@ -1,7 +1,5 @@
-from typing import Dict, List, Optional, Set, Tuple
 
-
-SKILL_GROUPS: Dict[str, Set[str]] = {
+SKILL_GROUPS: dict[str, set[str]] = {
     "deep_learning_frameworks": {
         "pytorch",
         "tensorflow",
@@ -155,7 +153,7 @@ SKILL_GROUPS: Dict[str, Set[str]] = {
     },
 }
 
-SKILL_SYNONYMS: Dict[str, List[str]] = {
+SKILL_SYNONYMS: dict[str, list[str]] = {
     "python": ["python3", "cpython"],
     "tensorflow": ["tf", "tf2", "tensorflow 2"],
     "pytorch": ["torch", "py-torch"],
@@ -170,10 +168,10 @@ SKILL_SYNONYMS: Dict[str, List[str]] = {
 }
 
 
-def build_skill_graph() -> Dict[str, Set[str]]:
-    graph: Dict[str, Set[str]] = {}
+def build_skill_graph() -> dict[str, set[str]]:
+    graph: dict[str, set[str]] = {}
 
-    for group_name, skills in SKILL_GROUPS.items():
+    for _group_name, skills in SKILL_GROUPS.items():
         skills_list = list(skills)
         for i, skill in enumerate(skills_list):
             if skill not in graph:
@@ -195,11 +193,11 @@ def build_skill_graph() -> Dict[str, Set[str]]:
 SKILL_GRAPH = build_skill_graph()
 
 
-def get_related_skills(skill_name: str, max_distance: int = 1) -> Dict[str, float]:
+def get_related_skills(skill_name: str, max_distance: int = 1) -> dict[str, float]:
     skill_lower = skill_name.lower().strip()
     if skill_lower in SKILL_GRAPH:
         direct = SKILL_GRAPH[skill_lower]
-        result: Dict[str, float] = {s: 1.0 for s in direct}
+        result: dict[str, float] = {s: 1.0 for s in direct}
         if max_distance >= 2:
             for related in direct:
                 if related in SKILL_GRAPH:
@@ -211,9 +209,9 @@ def get_related_skills(skill_name: str, max_distance: int = 1) -> Dict[str, floa
 
 
 def compute_skill_match(
-    candidate_skills: List[str],
-    required_skills: List[str],
-) -> Tuple[float, List[str], List[str]]:
+    candidate_skills: list[str],
+    required_skills: list[str],
+) -> tuple[float, list[str], list[str]]:
     if not required_skills:
         return 1.0, [], []
 
@@ -223,8 +221,8 @@ def compute_skill_match(
     if not required_lower:
         return 1.0, [], []
 
-    exact_matches: List[str] = []
-    transferable_matches: List[str] = []
+    exact_matches: list[str] = []
+    transferable_matches: list[str] = []
 
     for req in required_lower:
         if req in candidate_lower:
@@ -244,7 +242,7 @@ def compute_skill_match(
     return total_score, exact_matches, transferable_matches
 
 
-def get_skill_category(skill_name: str) -> Optional[str]:
+def get_skill_category(skill_name: str) -> str | None:
     skill_lower = skill_name.lower().strip()
     for category, skills in SKILL_GROUPS.items():
         if skill_lower in skills:
@@ -263,8 +261,8 @@ def get_skill_category(skill_name: str) -> Optional[str]:
     return None
 
 
-def compute_skill_breadth(skills: List[str]) -> Dict[str, float]:
-    categories: Dict[str, Set[str]] = {}
+def compute_skill_breadth(skills: list[str]) -> dict[str, float]:
+    categories: dict[str, set[str]] = {}
     uncovered: int = 0
 
     for skill in skills:
@@ -277,7 +275,7 @@ def compute_skill_breadth(skills: List[str]) -> Dict[str, float]:
         else:
             uncovered += 1
 
-    result: Dict[str, float] = {}
+    result: dict[str, float] = {}
     for cat, cat_skills in categories.items():
         result[f"cat_{cat}"] = float(len(cat_skills))
     result["uncovered_skills"] = float(uncovered)

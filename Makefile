@@ -1,17 +1,29 @@
-.PHONY: install test lint clean docker-build docker-run docker-compose-up
+.PHONY: install test lint lint-fix format clean docker-build docker-run docker-compose-up
 
 install:
 	pip install -r requirements.txt
-	pip install pyyaml pytest
+	pip install pyyaml pytest ruff pre-commit
 
 test:
 	python3 -m pytest tests/ -v
 
+test-coverage:
+	python3 -m pytest tests/ --cov=. --cov-report=term-missing
+
 lint:
-	python3 -m py_compile rank.py serve.py config.py models.py
+	python3 -m py_compile rank.py serve.py models.py
 	python3 -m py_compile features/extractor.py
 	python3 -m py_compile scoring/ranker.py scoring/explainer.py scoring/skill_graph.py scoring/jd_parser.py
 	python3 -m py_compile utils/nlp_utils.py
+	python3 -m py_compile config/__init__.py config/data.py
+	python3 -m ruff check .
+
+lint-fix:
+	python3 -m ruff check --fix .
+	python3 -m ruff format .
+
+format:
+	python3 -m ruff format .
 
 clean:
 	rm -rf __pycache__ */__pycache__ */*/__pycache__

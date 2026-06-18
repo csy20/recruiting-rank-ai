@@ -1,18 +1,21 @@
-import pytest
-from scoring.ranker import (
-    compute_dimension_scores,
-    compute_final_score,
-    rank_candidates,
-    generate_reasoning,
-    calibrate_scores,
-    _features_to_vector,
-)
+import os
+
 from scoring.jd_parser import (
-    parse_jd,
     get_jd_dimension_weights,
     get_jd_experience_score,
+    parse_jd,
 )
-
+from scoring.ranker import (
+    _features_to_vector,
+    audit_fairness,
+    calibrate_scores,
+    compute_dimension_scores,
+    compute_final_score,
+    generate_reasoning,
+    load_model,
+    rank_candidates,
+    train_model,
+)
 
 SAMPLE_FEATURES = {
     "years_experience": 8.0,
@@ -190,3 +193,87 @@ class TestJDParser:
         profile = {"experience_years": (3.0, 7.0)}
         assert get_jd_experience_score(5.0, profile) == 1.0
         assert get_jd_experience_score(10.0, profile) < 1.0
+
+
+class TestAuditFairness:
+    def test_enabled_with_empty(self):
+        result = audit_fairness([], [], [])
+        assert result["audit_enabled"] is True
+        for group in [
+            "consulting",
+            "non_consulting",
+            "high_prestige",
+            "low_prestige",
+            "high_location",
+            "low_location",
+        ]:
+            assert result["group_sizes"][group] == 0
+
+    def test_basic_audit(self, sample_features):
+        features_list = [sample_features, sample_features]
+        ids = ["a", "b"]
+        dims = {
+            "technical_match": 0.8,
+            "semantic_match": 0.6,
+            "career_quality": 0.7,
+            "behavioral": 0.7,
+            "retention": 0.6,
+        }
+        ranked = [("a", 90.0, 1, dims), ("b", 70.0, 2, dims)]
+        result = audit_fairness(ranked, features_list, ids)
+        assert result["audit_enabled"] is True
+        assert "disparities" in result
+        assert "group_sizes" in result
+
+    def test_empty_group_handling(self, sample_features):
+        consulting_feats = sample_features.copy()
+        consulting_feats["entirely_consulting"] = 1.0
+        features_list = [consulting_feats]
+        ids = ["c"]
+        dims = {
+            "technical_match": 0.5,
+            "semantic_match": 0.5,
+            "career_quality": 0.5,
+            "behavioral": 0.5,
+            "retention": 0.5,
+        }
+        ranked = [("c", 50.0, 1, dims)]
+        result = audit_fairness(ranked, features_list, ids)
+        assert result["audit_enabled"] is True
+
+
+class TestTrainModel:
+    def test_empty_features(self):
+        model = train_model([])
+        assert model is None
+
+    def test_training_with_scores(self, sample_features):
+        model = train_model(
+            [sample_features, sample_features],
+            scores=[0.8, 0.6],
+        )
+        assert model is not None
+        feature_vec = _features_to_vector(sample_features)
+        pred = model.predict([feature_vec])
+        assert 0 <= float(pred[0]) <= 1.0
+
+
+class TestLoadModel:
+    def test_nonexistent_path(self):
+        model = load_model("/tmp/nonexistent_model.pkl")
+        assert model is None
+
+    def test_save_and_load_cycle(self, tmp_path, sample_features):
+        from scoring.ranker import train_model
+
+        model_path = str(tmp_path / "test_model.pkl")
+        original = train_model(
+            [sample_features, sample_features], scores=[0.8, 0.6], model_path=model_path
+        )
+        assert original is not None
+        assert os.path.exists(model_path)
+        loaded = load_model(model_path)
+        assert loaded is not None
+        feature_vec = _features_to_vector(sample_features)
+        pred = loaded.predict([feature_vec])
+        assert 0 <= float(pred[0]) <= 1.0

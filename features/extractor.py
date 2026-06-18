@@ -1,50 +1,48 @@
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple
-from datetime import datetime, date
+from datetime import datetime
+from typing import Any
 
 from config import (
-    JD_KEYWORDS,
-    JD_ANTI_PATTERNS,
+    CERTIFICATION_PATTERNS,
+    COMPANY_TIERS,
     CONSULTING_COMPANIES,
     CONSULTING_WITH_ML_BOOKS,
-    COMPANY_TIERS,
-    SKILL_CATEGORIES,
-    EDUCATION_PATTERNS,
     EDUCATION_FIELDS,
-    CERTIFICATION_PATTERNS,
-    REFERENCE_DATE,
-    SENIORITY_KEYWORDS,
-    PREFERRED_LOCATIONS,
-    NON_TECH_TITLES,
+    EDUCATION_PATTERNS,
     HONEYPOT_THRESHOLD,
     INFLATED_DURATION_MONTHS,
-    INFLATED_SKILL_EXPERT_THRESHOLD,
     INFLATED_LOW_DURATION_THRESHOLD,
     INFLATED_SKILL_COUNT_THRESHOLD,
+    INFLATED_SKILL_EXPERT_THRESHOLD,
+    JD_ANTI_PATTERNS,
+    JD_KEYWORDS,
+    NON_TECH_TITLES,
+    PREFERRED_LOCATIONS,
+    REFERENCE_DATE,
+    SENIORITY_KEYWORDS,
     SHORT_STINT_MONTHS,
-    BEHAVIORAL_WEIGHTS,
+    SKILL_CATEGORIES,
 )
+from scoring.skill_graph import compute_skill_breadth, compute_skill_match
 from utils.nlp_utils import (
-    tokenize,
+    compile_keyword_patterns,
     count_keyword_matches,
     count_ngram_matches,
-    has_production_indicators,
-    compile_keyword_patterns,
     count_pattern_matches,
+    has_production_indicators,
 )
-from scoring.skill_graph import compute_skill_match, compute_skill_breadth
 
-_SKILL_CATEGORY_PATTERNS: Dict[str, Any] = {
+_SKILL_CATEGORY_PATTERNS: dict[str, Any] = {
     cat: compile_keyword_patterns(list(terms))
     for cat, terms in SKILL_CATEGORIES.items()
 }
 
-_EDUCATION_LEVEL_PATTERNS: Dict[str, Any] = {
+_EDUCATION_LEVEL_PATTERNS: dict[str, Any] = {
     level: compile_keyword_patterns(info["keywords"])
     for level, info in EDUCATION_PATTERNS.items()
 }
 
-_EDUCATION_FIELD_PATTERNS: Dict[str, Any] = {
+_EDUCATION_FIELD_PATTERNS: dict[str, Any] = {
     field: compile_keyword_patterns(info["keywords"])
     for field, info in EDUCATION_FIELDS.items()
 }
@@ -139,7 +137,7 @@ _AI_KEYWORDS_IN_SUMMARY = [
 ]
 
 
-def load_candidates(path: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+def load_candidates(path: str, limit: int | None = None) -> list[dict[str, Any]]:
     try:
         with open(path) as f:
             first_char = f.read(1)
@@ -149,10 +147,10 @@ def load_candidates(path: str, limit: Optional[int] = None) -> List[Dict[str, An
                 if not isinstance(data, list):
                     return []
                 return data[:limit] if limit else data
-    except (json.JSONDecodeError, IOError, OSError) as e:
+    except (json.JSONDecodeError, OSError) as e:
         raise ValueError(f"Failed to load candidates from {path}: {e}") from e
 
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     try:
         with open(path) as f:
             for i, line in enumerate(f):
@@ -165,15 +163,15 @@ def load_candidates(path: str, limit: Optional[int] = None) -> List[Dict[str, An
                     candidates.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-    except (IOError, OSError) as e:
+    except OSError as e:
         raise ValueError(f"Failed to read candidates file {path}: {e}") from e
 
     return candidates
 
 
-def _get_combined_text(candidate: Dict[str, Any]) -> str:
+def _get_combined_text(candidate: dict[str, Any]) -> str:
     profile = candidate.get("profile", {}) or {}
-    texts: List[str] = []
+    texts: list[str] = []
     headline = profile.get("headline", "") or ""
     summary = profile.get("summary", "") or ""
     if headline:
@@ -196,7 +194,7 @@ def _get_combined_text(candidate: Dict[str, Any]) -> str:
     return " ".join(texts)
 
 
-def _get_all_skill_names(candidate: Dict[str, Any]) -> List[str]:
+def _get_all_skill_names(candidate: dict[str, Any]) -> list[str]:
     return [
         s.get("name", "").lower()
         for s in (candidate.get("skills") or [])
@@ -204,7 +202,7 @@ def _get_all_skill_names(candidate: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _get_skill_experience_months(candidate: Dict[str, Any]) -> int:
+def _get_skill_experience_months(candidate: dict[str, Any]) -> int:
     total = 0
     for s in candidate.get("skills") or []:
         if isinstance(s, dict):
@@ -212,8 +210,8 @@ def _get_skill_experience_months(candidate: Dict[str, Any]) -> int:
     return total
 
 
-def _get_skill_proficiencies(candidate: Dict[str, Any]) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def _get_skill_proficiencies(candidate: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for s in candidate.get("skills") or []:
         if isinstance(s, dict):
             prof = s.get("proficiency", "beginner") or "beginner"
@@ -221,7 +219,7 @@ def _get_skill_proficiencies(candidate: Dict[str, Any]) -> Dict[str, int]:
     return counts
 
 
-def _analyze_career_history(candidate: Dict[str, Any]) -> Dict[str, Any]:
+def _analyze_career_history(candidate: dict[str, Any]) -> dict[str, Any]:
     roles = candidate.get("career_history") or []
     role_count = len(roles)
 
@@ -241,13 +239,13 @@ def _analyze_career_history(candidate: Dict[str, Any]) -> Dict[str, Any]:
             "consulting_with_ml": False,
         }
 
-    companies: Set[str] = set()
+    companies: set[str] = set()
     total_months = 0
     consulting_roles = 0
     product_roles = 0
     max_prestige = 0.0
-    seniority_counts: List[int] = []
-    tenures: List[int] = []
+    seniority_counts: list[int] = []
+    tenures: list[int] = []
     short_stints = 0
     has_ml_consulting = False
 
@@ -317,7 +315,7 @@ def _analyze_career_history(candidate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _compute_jd_technical_match(text: str) -> Dict[str, float]:
+def _compute_jd_technical_match(text: str) -> dict[str, float]:
     scores = {}
     for dim, cfg in JD_KEYWORDS.items():
         scores[dim] = count_ngram_matches(text, cfg["terms"])
@@ -328,7 +326,7 @@ def _detect_anti_patterns(text: str) -> int:
     return count_keyword_matches(text, JD_ANTI_PATTERNS)
 
 
-def _extract_ai_depth(text: str, candidate: Dict[str, Any]) -> float:
+def _extract_ai_depth(text: str, candidate: dict[str, Any]) -> float:
     match_count = count_keyword_matches(text, _AI_TERMS)
     depth = min(match_count / 5.0, 1.0)
     if has_production_indicators(text):
@@ -353,8 +351,8 @@ def _extract_evaluation_depth(text: str) -> float:
     return min(match_count / 3.0, 1.0)
 
 
-def _compute_behavioral_score(signals: Any) -> Dict[str, float]:
-    components: Dict[str, float] = {}
+def _compute_behavioral_score(signals: Any) -> dict[str, float]:
+    components: dict[str, float] = {}
     signals = signals or {}
 
     rr = signals.get("recruiter_response_rate", 0.0) or 0.0
@@ -415,8 +413,8 @@ def _compute_behavioral_score(signals: Any) -> Dict[str, float]:
 
 
 def _compute_retention_score(
-    candidate: Dict[str, Any], career: Dict[str, Any]
-) -> Dict[str, float]:
+    candidate: dict[str, Any], career: dict[str, Any]
+) -> dict[str, float]:
     avg_tenure = career.get("avg_tenure_months", 0.0) or 0.0
     tenure_years = avg_tenure / 12.0 if avg_tenure > 0 else 0.0
 
@@ -461,8 +459,8 @@ def _compute_retention_score(
     }
 
 
-def _detect_honeypot(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    flags: List[str] = []
+def _detect_honeypot(candidate: dict[str, Any]) -> dict[str, Any]:
+    flags: list[str] = []
     risk_score = 0.0
 
     for role in candidate.get("career_history") or []:
@@ -474,7 +472,7 @@ def _detect_honeypot(candidate: Dict[str, Any]) -> Dict[str, Any]:
         dur = role.get("duration_months", 0) or 0
         if start and dur > 0:
             try:
-                start_dt = datetime.strptime(str(start)[:10], "%Y-%m-%d")
+                datetime.strptime(str(start)[:10], "%Y-%m-%d")
                 end_dt = role.get("end_date")
                 if end_dt:
                     datetime.strptime(str(end_dt)[:10], "%Y-%m-%d")
@@ -540,7 +538,7 @@ def _detect_honeypot(candidate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _compute_location_score(candidate: Dict[str, Any]) -> float:
+def _compute_location_score(candidate: dict[str, Any]) -> float:
     profile = candidate.get("profile") or {}
     location = (profile.get("location") or "").lower()
     country = (profile.get("country") or "").lower()
@@ -558,7 +556,7 @@ def _compute_location_score(candidate: Dict[str, Any]) -> float:
     return PREFERRED_LOCATIONS.get("global_other", {}).get("score", 0.40)
 
 
-def _detect_education(candidate: Dict[str, Any]) -> Dict[str, float]:
+def _detect_education(candidate: dict[str, Any]) -> dict[str, float]:
     profile = candidate.get("profile") or {}
     summary = (profile.get("summary") or "").lower()
     text = summary
@@ -591,7 +589,7 @@ def _detect_certifications(text: str) -> float:
     return float(count_pattern_matches(text, _CERT_PATTERNS))
 
 
-def _compute_skill_categories(skills: List[str]) -> Dict[str, float]:
+def _compute_skill_categories(skills: list[str]) -> dict[str, float]:
     result = {}
     combined = " ".join(skills)
     for category, patterns in _SKILL_CATEGORY_PATTERNS.items():
@@ -607,7 +605,7 @@ def _compute_keyword_diversity(text: str) -> float:
     return non_zero / max(len(jd_dims), 1)
 
 
-def _compute_growth_rate(career: Dict[str, Any]) -> float:
+def _compute_growth_rate(career: dict[str, Any]) -> float:
     total_months = career.get("total_experience_months", 0) or 0
     seniority = career.get("career_seniority", 0.0) or 0.0
     role_count = career.get("role_count", 0) or 0
@@ -619,7 +617,7 @@ def _compute_growth_rate(career: Dict[str, Any]) -> float:
     return min(seniority * 2.0 / years, 1.0)
 
 
-def extract_all_features(candidate: Dict[str, Any]) -> Dict[str, float]:
+def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
     if not isinstance(candidate, dict):
         return {}
 
@@ -644,7 +642,7 @@ def extract_all_features(candidate: Dict[str, Any]) -> Dict[str, float]:
     skill_cats = _compute_skill_categories(skills)
     growth_rate = _compute_growth_rate(career)
 
-    features: Dict[str, float] = {
+    features: dict[str, float] = {
         "years_experience": float(profile.get("years_of_experience", 0) or 0),
         "num_skills": float(len(skills)),
         "expert_skills": float(
@@ -688,9 +686,12 @@ def extract_all_features(candidate: Dict[str, Any]) -> Dict[str, float]:
     features["certifications"] = certifications
     features.update(skill_cats)
 
+    jd_required_skills = list(
+        {term.lower() for dim in JD_KEYWORDS.values() for term in dim["terms"]}
+    )
     skill_match_score, exact_matches, transferable_matches = compute_skill_match(
         skills,
-        list(JD_KEYWORDS.keys()),
+        jd_required_skills,
     )
     features["skill_match_score"] = skill_match_score
     features["skill_exact_matches"] = float(len(exact_matches))

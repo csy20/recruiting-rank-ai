@@ -1,12 +1,13 @@
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Skill(BaseModel):
     name: str = ""
-    proficiency: Optional[str] = "beginner"
-    duration_months: Optional[int] = 0
+    proficiency: str | None = "beginner"
+    duration_months: int | None = 0
 
     @field_validator("duration_months", mode="before")
     @classmethod
@@ -31,10 +32,10 @@ class CareerEntry(BaseModel):
     title: str = ""
     description: str = ""
     industry: str = ""
-    duration_months: Optional[int] = 0
-    is_current: Optional[bool] = False
-    start_date: Optional[str] = ""
-    end_date: Optional[str] = ""
+    duration_months: int | None = 0
+    is_current: bool | None = False
+    start_date: str | None = ""
+    end_date: str | None = ""
 
     @field_validator("duration_months", mode="before")
     @classmethod
@@ -43,7 +44,7 @@ class CareerEntry(BaseModel):
             return 0
         return max(0, int(v))
 
-    def parsed_start(self) -> Optional[date]:
+    def parsed_start(self) -> date | None:
         if not self.start_date:
             return None
         try:
@@ -51,7 +52,7 @@ class CareerEntry(BaseModel):
         except (ValueError, TypeError):
             return None
 
-    def parsed_end(self) -> Optional[date]:
+    def parsed_end(self) -> date | None:
         if not self.end_date:
             return None
         try:
@@ -61,13 +62,13 @@ class CareerEntry(BaseModel):
 
 
 class Profile(BaseModel):
-    headline: Optional[str] = ""
-    summary: Optional[str] = ""
-    current_company: Optional[str] = ""
-    current_title: Optional[str] = ""
-    years_of_experience: Optional[float] = 0.0
-    location: Optional[str] = ""
-    country: Optional[str] = ""
+    headline: str | None = ""
+    summary: str | None = ""
+    current_company: str | None = ""
+    current_title: str | None = ""
+    years_of_experience: float | None = 0.0
+    location: str | None = ""
+    country: str | None = ""
 
     @field_validator("years_of_experience", mode="before")
     @classmethod
@@ -81,25 +82,25 @@ class Profile(BaseModel):
 
 
 class RedrobSignals(BaseModel):
-    recruiter_response_rate: Optional[float] = 0.0
-    interview_completion_rate: Optional[float] = 0.0
-    open_to_work_flag: Optional[bool] = False
-    saved_by_recruiters_30d: Optional[int] = 0
-    search_appearance_30d: Optional[int] = 0
-    github_activity_score: Optional[float] = -1.0
-    notice_period_days: Optional[int] = 30
-    willing_to_relocate: Optional[bool] = False
-    offer_acceptance_rate: Optional[float] = 0.5
-    avg_response_time_hours: Optional[float] = 24.0
-    verified_email: Optional[bool] = False
-    verified_phone: Optional[bool] = False
-    linkedin_connected: Optional[bool] = False
-    applications_submitted_30d: Optional[int] = 0
-    profile_views_received_30d: Optional[int] = 0
-    connection_count: Optional[int] = 0
-    endorsements_received: Optional[int] = 0
-    last_active_date: Optional[str] = ""
-    profile_completeness_score: Optional[float] = 0.0
+    recruiter_response_rate: float | None = 0.0
+    interview_completion_rate: float | None = 0.0
+    open_to_work_flag: bool | None = False
+    saved_by_recruiters_30d: int | None = 0
+    search_appearance_30d: int | None = 0
+    github_activity_score: float | None = -1.0
+    notice_period_days: int | None = 30
+    willing_to_relocate: bool | None = False
+    offer_acceptance_rate: float | None = 0.5
+    avg_response_time_hours: float | None = 24.0
+    verified_email: bool | None = False
+    verified_phone: bool | None = False
+    linkedin_connected: bool | None = False
+    applications_submitted_30d: int | None = 0
+    profile_views_received_30d: int | None = 0
+    connection_count: int | None = 0
+    endorsements_received: int | None = 0
+    last_active_date: str | None = ""
+    profile_completeness_score: float | None = 0.0
 
     @field_validator(
         "recruiter_response_rate", "interview_completion_rate", mode="before"
@@ -141,10 +142,10 @@ class RedrobSignals(BaseModel):
 
 class Candidate(BaseModel):
     candidate_id: str = ""
-    profile: Optional[Profile] = None
-    career_history: Optional[List[CareerEntry]] = None
-    skills: Optional[List[Skill]] = None
-    redrob_signals: Optional[RedrobSignals] = None
+    profile: Profile | None = None
+    career_history: list[CareerEntry] | None = None
+    skills: list[Skill] | None = None
+    redrob_signals: RedrobSignals | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -173,7 +174,7 @@ class DimensionScores(BaseModel):
     behavioral: float = 0.0
     retention: float = 0.0
     risk_adjustment: float = 1.0
-    jd_semantic_similarity: Optional[float] = None
+    jd_semantic_similarity: float | None = None
 
 
 class RankedResult(BaseModel):
@@ -182,22 +183,22 @@ class RankedResult(BaseModel):
     score: float
     dimensions: DimensionScores
     reasoning: str = ""
-    feature_contributions: Optional[Dict[str, float]] = None
-    skill_matches: Optional[List[str]] = None
+    feature_contributions: dict[str, float] | None = None
+    skill_matches: list[str] | None = None
 
 
 class JDAnalysis(BaseModel):
     experience_range: tuple = (0.0, 20.0)
-    dimension_weights: Dict[str, float] = {}
-    required_terms: Dict[str, float] = {}
-    preferred_terms: Dict[str, float] = {}
-    technical_terms: Dict[str, float] = {}
-    sections: Dict[str, str] = {}
+    dimension_weights: dict[str, float] = {}
+    required_terms: dict[str, float] = {}
+    preferred_terms: dict[str, float] = {}
+    technical_terms: dict[str, float] = {}
+    sections: dict[str, str] = {}
 
 
 class RankRequest(BaseModel):
-    candidates: List[Dict[str, Any]]
-    jd_text: Optional[str] = None
+    candidates: list[dict[str, Any]]
+    jd_text: str | None = None
     top_k: int = Field(default=100, ge=1, le=5000)
     include_dimensions: bool = True
     include_reasoning: bool = True
@@ -205,8 +206,8 @@ class RankRequest(BaseModel):
 
 
 class RankResponse(BaseModel):
-    results: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
+    results: list[dict[str, Any]]
+    metadata: dict[str, Any]
 
 
 class AuditEntry(BaseModel):
@@ -221,6 +222,6 @@ class AuditEntry(BaseModel):
 class FairnessReport(BaseModel):
     audit_enabled: bool
     disparity_threshold: float
-    group_sizes: Dict[str, int]
-    disparities: Dict[str, Dict[str, AuditEntry]]
+    group_sizes: dict[str, int]
+    disparities: dict[str, dict[str, AuditEntry]]
     passed: bool

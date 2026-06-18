@@ -1,15 +1,14 @@
-import pytest
 from utils.nlp_utils import (
-    tokenize,
+    compile_keyword_patterns,
+    compute_jd_candidate_overlap,
     count_keyword_matches,
     count_ngram_matches,
-    extract_years,
-    has_production_indicators,
-    compile_keyword_patterns,
     count_pattern_matches,
     extract_key_phrases,
     extract_technical_terms,
-    compute_jd_candidate_overlap,
+    extract_years,
+    has_production_indicators,
+    tokenize,
 )
 
 

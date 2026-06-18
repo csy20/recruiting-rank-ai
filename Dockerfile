@@ -10,7 +10,8 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
-COPY config.py config.yaml models.py rank.py serve.py requirements.txt ./
+COPY config.yaml models.py rank.py serve.py requirements.txt ./
+COPY config/ config/
 COPY features/ features/
 COPY scoring/ scoring/
 COPY utils/ utils/

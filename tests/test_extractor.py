@@ -1,32 +1,28 @@
-import pytest
 from features.extractor import (
-    load_candidates,
-    _get_combined_text,
-    _get_all_skill_names,
     _analyze_career_history,
-    _compute_jd_technical_match,
-    _detect_anti_patterns,
-    _extract_ai_depth,
-    _extract_retrieval_depth,
-    _extract_evaluation_depth,
     _compute_behavioral_score,
-    _compute_retention_score,
-    _detect_honeypot,
-    _compute_location_score,
-    _detect_education,
-    _detect_certifications,
-    _compute_skill_categories,
-    _compute_keyword_diversity,
     _compute_growth_rate,
+    _compute_jd_technical_match,
+    _compute_keyword_diversity,
+    _compute_location_score,
+    _compute_retention_score,
+    _compute_skill_categories,
+    _detect_anti_patterns,
+    _detect_education,
+    _detect_honeypot,
+    _extract_ai_depth,
+    _get_combined_text,
     extract_all_features,
+    load_candidates,
 )
-
 
 SAMPLE_CANDIDATE = {
     "candidate_id": "CAND_0001",
     "profile": {
         "headline": "Senior ML Engineer at Google",
-        "summary": "Experienced in building production ML systems with Python and PyTorch. Expertise in NLP, embeddings, and vector search. PhD in Computer Science.",
+        "summary": "Experienced in building production ML systems with Python and "
+        "PyTorch. Expertise in NLP, embeddings, and vector search. "
+        "PhD in Computer Science.",
         "current_company": "google",
         "current_title": "Senior ML Engineer",
         "years_of_experience": 8,

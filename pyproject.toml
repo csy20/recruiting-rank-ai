@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "recruiting-rank-ai"
+version = "2.0.0"
+description = "Intelligent candidate discovery and ranking system with multi-dimension scoring"
+authors = [
+    {name = "Recruiting Rank AI Team"},
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "pydantic>=2.0",
+    "pyyaml",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.scripts]
+rank = "rank:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"scoring/ranker.py" = ["N806"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
