@@ -67,6 +67,15 @@ def _compute_technical_match(
 
     sem_sim = features.get("semantic_similarity", 0.0)
     tech_match = 0.90 * tech_match + 0.10 * sem_sim
+
+    retrieval_boost_orig = features.get("retrieval_depth", 0.0)
+    ai_boost_orig = features.get("ai_depth", 0.0)
+    if retrieval_boost_orig > 0.3 or ai_boost_orig > 0.3:
+        gh_score = features.get("beh_github_activity_score", 0.0)
+        if isinstance(gh_score, (int, float)) and gh_score > 0:
+            github_boost = min(gh_score * 0.08, 0.08)
+            tech_match = min(tech_match + github_boost, 1.0)
+
     return min(tech_match, 1.0)
 
 
@@ -116,9 +125,14 @@ def _compute_career_quality(features: dict[str, float]) -> float:
 
 
 def _compute_behavioral(features: dict[str, float]) -> float:
+    is_domain_candidate = (
+        features.get("retrieval_depth", 0.0) > 0.3 or features.get("ai_depth", 0.0) > 0.3
+    )
     behavioral_score = 0.0
     total_bw = 0.0
     for key, weight in BEHAVIORAL_WEIGHTS.items():
+        if is_domain_candidate and key == "github_activity_score":
+            continue
         val = features.get(f"beh_{key}", 0.0)
         if val is None:
             val = 0.0
