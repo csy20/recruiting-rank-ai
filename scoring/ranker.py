@@ -5,6 +5,7 @@ from typing import Any
 
 import joblib
 import numpy as np
+import scipy.stats
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -395,15 +396,15 @@ def calibrate_scores(
     if not ranked:
         return ranked
     scores = [r[1] for r in ranked]
-    min_s = min(scores)
-    max_s = max(scores)
-    if max_s - min_s < 0.01:
+    ranks = scipy.stats.rankdata(scores, method="average")
+    n = len(scores)
+    if n <= 1:
         return ranked
 
     calibrated: list[tuple[str, float, int, dict[str, float]]] = []
-    for cid, score, rank_pos, dims in ranked:
-        normalized = (score - min_s) / (max_s - min_s)
-        calibrated_score = normalized * 100.0
+    for i, (cid, score, rank_pos, dims) in enumerate(ranked):
+        percentile = (ranks[i] - 1.0) / (n - 1.0) if n > 1 else 1.0
+        calibrated_score = percentile * 100.0
         calibrated.append((cid, calibrated_score, rank_pos, dims))
     return calibrated
 
