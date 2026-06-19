@@ -402,6 +402,33 @@ def _compute_behavioral_score(signals: Any) -> dict[str, float]:
     connections = int(signals.get("connection_count", 0) or 0)
     components["connection_density"] = min(connections / 500.0, 1.0)
 
+    last_active = signals.get("last_active_date", "") or ""
+    recency = 1.0
+    if last_active:
+        try:
+            la_date = datetime.strptime(str(last_active)[:10], "%Y-%m-%d").date()
+            days_since = (REFERENCE_DATE - la_date).days
+            if days_since > 180:
+                recency = 0.45
+            elif days_since > 90:
+                recency = 0.70
+            elif days_since > 45:
+                recency = 0.85
+        except (ValueError, TypeError):
+            recency = 0.45
+    rrr = min(float(components.get("recruiter_response_rate", 0)), 1.0)
+    o2w = 1.0 if signals.get("open_to_work_flag", False) else 0.65
+    notice_raw = signals.get("notice_period_days", 30)
+    try:
+        notice = float(notice_raw) if notice_raw is not None else 30.0
+    except (ValueError, TypeError):
+        notice = 30.0
+    notice_s = 1.0 if notice <= 30 else (0.85 if notice <= 60 else (0.70 if notice <= 90 else 0.50))
+    icr = min(float(signals.get("interview_completion_rate", 0.5) or 0.5), 1.0)
+    components["reachability"] = (
+        0.30 * recency + 0.20 * rrr + 0.20 * o2w + 0.15 * notice_s + 0.15 * icr
+    )
+
     return components
 
 
