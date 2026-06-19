@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import date, datetime
 from typing import Any
 
 import joblib
@@ -16,6 +17,7 @@ from config import (
     JD_KEYWORDS,
     MODEL_CONFIG,
     MODEL_PATH,
+    REFERENCE_DATE,
     SCORING,
 )
 
@@ -166,6 +168,54 @@ def compute_dimension_scores(
     }
 
 
+def compute_availability_multiplier(
+    signals: dict[str, Any],
+    reference_date: date | None = None,
+) -> float:
+    ref = reference_date or REFERENCE_DATE
+    last_active = signals.get("last_active_date", "") or ""
+    recency_score = 1.0
+    if last_active:
+        try:
+            la_date = datetime.strptime(str(last_active)[:10], "%Y-%m-%d").date()
+            days_since = (ref - la_date).days
+            if days_since > 180:
+                recency_score = 0.45
+            elif days_since > 90:
+                recency_score = 0.70
+            elif days_since > 45:
+                recency_score = 0.85
+        except (ValueError, TypeError):
+            recency_score = 0.45
+
+    rrr = float(signals.get("recruiter_response_rate", 0) or 0)
+    responsiveness_score = 0.5 + 0.5 * min(max(rrr, 0.0), 1.0)
+
+    openness_score = 1.0 if signals.get("open_to_work_flag", False) else 0.65
+
+    notice_raw = signals.get("notice_period_days", 30)
+    try:
+        notice = float(notice_raw) if notice_raw is not None else 30.0
+    except (ValueError, TypeError):
+        notice = 30.0
+    if notice <= 30:
+        notice_score = 1.0
+    elif notice <= 60:
+        notice_score = 0.85
+    elif notice <= 90:
+        notice_score = 0.70
+    else:
+        notice_score = 0.50
+
+    multiplier = (
+        0.40 * recency_score
+        + 0.25 * responsiveness_score
+        + 0.20 * openness_score
+        + 0.15 * notice_score
+    )
+    return max(multiplier, 0.35)
+
+
 def compute_final_score(
     dim_scores: dict[str, float],
     ml_score: float | None = None,
@@ -193,12 +243,16 @@ def rank_candidates(
     features_list: list[dict[str, float]],
     jd_weights: dict[str, float] | None = None,
     ml_model: Any | None = None,
+    signals_list: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, float, int, dict[str, float]]]:
     results: list[tuple[str, float, dict[str, float]]] = []
 
-    for cid, feats in zip(candidate_ids, features_list, strict=True):
+    for i, (cid, feats) in enumerate(zip(candidate_ids, features_list, strict=True)):
         dim_scores = compute_dimension_scores(feats, jd_weights)
         final_score = compute_final_score(dim_scores)
+        if signals_list and i < len(signals_list):
+            avail_mult = compute_availability_multiplier(signals_list[i])
+            final_score *= avail_mult
         results.append((cid, final_score, dim_scores))
 
     if ml_model is not None:

@@ -283,7 +283,10 @@ def rank(
 
     logger.info("Ranking candidates...")
     ids = [c.get("candidate_id") or str(i) for i, c in enumerate(candidates)]
-    ranked = rank_candidates(ids, all_features, jd_weights=jd_weights, ml_model=ml_model)
+    sigs = [c.get("redrob_signals", {}) for c in candidates]
+    ranked = rank_candidates(
+        ids, all_features, jd_weights=jd_weights, ml_model=ml_model, signals_list=sigs
+    )
 
     logger.info("Calibrating scores...")
     ranked = calibrate_scores(ranked)
