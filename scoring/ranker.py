@@ -255,6 +255,14 @@ def rank_candidates(
         if signals_list and i < len(signals_list):
             avail_mult = compute_availability_multiplier(signals_list[i])
             final_score *= avail_mult
+        if feats.get("disq_consulting_only", 0.0) > 0.5:
+            final_score = min(final_score, 55.0)
+        if feats.get("disq_title_chaser", 0.0) > 0.5:
+            final_score = min(final_score, 65.0)
+        if feats.get("disq_wrong_domain", 0.0) > 0.5:
+            final_score = min(final_score, 50.0)
+        if feats.get("disq_manager_no_code", 0.0) > 0.5:
+            final_score = min(final_score, 60.0)
         results.append((cid, final_score, dim_scores))
 
     if ml_model is not None:
