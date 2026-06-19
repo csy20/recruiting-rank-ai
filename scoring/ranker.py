@@ -341,13 +341,16 @@ def train_model(
 
     X = np.array([_features_to_vector(f) for f in features_list])
 
-    if scores is not None and len(scores) == len(features_list):
-        y = np.array(scores)
-    elif signals_list is not None and len(signals_list) == len(features_list):
-        logger.info("Building hireability targets from behavioral signals")
+    if signals_list is not None and len(signals_list) == len(features_list):
+        logger.info(
+            "Building hireability targets from behavioral signals (avoids circular training)"
+        )
         y = np.array([_build_hireability_target(s) for s in signals_list])
+    elif scores is not None and len(scores) == len(features_list):
+        logger.warning("Training on rule-based scores (circular — prefer signals_list instead)")
+        y = np.array(scores)
     else:
-        logger.warning("No training targets available (provide scores or signals_list)")
+        logger.warning("No training targets available (provide signals_list or scores)")
         return None
 
     mc = MODEL_CONFIG
