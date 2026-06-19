@@ -716,6 +716,47 @@ def detect_disqualifiers(
     return result
 
 
+_DEPLOYMENT_VERBS = {"deploy", "ship", "launch", "release", "production"}
+_SCALE_PATTERN = r"\d+[mkb]+\s*(users|requests|queries|searches|documents|candidates)"
+_RELIABILITY_TERMS = {
+    "latency",
+    "throughput",
+    "sla",
+    "uptime",
+    "99.",
+    "p99",
+    "p95",
+    "p50",
+    "availability",
+}
+_EXPERIMENT_TERMS = {"a/b test", "ab test", "rollout", "canary", "experiment", "gradual rollout"}
+
+
+def _extract_production_signals(candidate: dict[str, Any]) -> float:
+    import re
+
+    roles = (candidate.get("career_history") or [])[:4]
+    total_matches = 0
+    role_count = 0
+    for r in roles:
+        if not isinstance(r, dict):
+            continue
+        text = ((r.get("description", "") or "") + " " + (r.get("title", "") or "")).lower()
+        if not text.strip():
+            continue
+        role_count += 1
+        matches = 0
+        matches += sum(1 for v in _DEPLOYMENT_VERBS if v in text)
+        matches += len(re.findall(_SCALE_PATTERN, text))
+        matches += sum(1 for t in _RELIABILITY_TERMS if t in text)
+        matches += sum(1 for t in _EXPERIMENT_TERMS if t in text)
+        total_matches += min(matches, 5)
+    if role_count == 0:
+        return 0.0
+    density = total_matches / (role_count * 5.0)
+    return min(density, 1.0)
+
+
 def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
     if not isinstance(candidate, dict):
         return {}
@@ -788,6 +829,7 @@ def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
     features["disq_consulting_only"] = 1.0 if disqualifiers["consulting_only"] else 0.0
     features["disq_manager_no_code"] = 1.0 if disqualifiers["manager_no_code"] else 0.0
     features["disq_wrong_domain"] = 1.0 if disqualifiers["wrong_domain"] else 0.0
+    features["production_signal"] = _extract_production_signals(candidate)
     features["education_level"] = education["education_level"]
     features["education_field"] = education["education_field"]
     features["certifications"] = certifications

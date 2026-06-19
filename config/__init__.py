@@ -213,8 +213,9 @@ SCORING = {
         "seniority_weight": 0.20,
         "product_weight": 0.20,
         "company_prestige_weight": 0.15,
-        "tenure_stability_weight": 0.10,
-        "skill_growth_weight": 0.10,
+        "tenure_stability_weight": 0.0,
+        "skill_growth_weight": 0.0,
+        "production_signal_weight": 0.20,
         "consulting_penalty": 0.10,
     },
     "retention": {

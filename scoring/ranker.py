@@ -101,6 +101,7 @@ def _compute_career_quality(features: dict[str, float]) -> float:
     is_consulting = features.get("entirely_consulting", 0.0)
     prestige = features.get("company_prestige", 0.0)
     growth_rate = features.get("growth_rate", 0.5)
+    prod_signal = features.get("production_signal", 0.0)
 
     career_quality = (
         c["progression_weight"] * progression
@@ -108,6 +109,7 @@ def _compute_career_quality(features: dict[str, float]) -> float:
         + c["product_weight"] * has_product
         + c["company_prestige_weight"] * prestige
         + c["skill_growth_weight"] * growth_rate
+        + c.get("production_signal_weight", 0.0) * prod_signal
         - c["consulting_penalty"] * is_consulting
     )
     return max(0.0, min(1.0, career_quality))
