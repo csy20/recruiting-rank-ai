@@ -13,6 +13,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 from config import (
     JD_KEYWORDS,
+    MODEL_PATH,
     OUTPUT_PATH,
     SENTENCE_TRANSFORMER_MODEL,
 )
@@ -258,16 +259,6 @@ def precompute(
         ids.append(cid)
         all_features.append(feats)
 
-    _precompute_embeddings(candidates, out_dir)
-
-    jd_text = _load_jd_text(jd_path) if jd_path else _build_jd_text()
-    if jd_text:
-        candidate_texts = [_get_candidate_text(c) for c in candidates]
-        semantic_scores = _compute_semantic_features(candidates, candidate_texts, jd_text)
-        for i, sim in enumerate(semantic_scores):
-            if i < len(all_features):
-                all_features[i]["semantic_similarity"] = sim
-
     if not all_features:
         logger.warning("No features extracted!")
         return
@@ -409,14 +400,16 @@ def rank(
             if i < len(all_features):
                 all_features[i]["semantic_similarity"] = sim
 
-    ml_model = load_model(model_path) if model_path and os.path.exists(model_path) else None
-    if model_path and ml_model is None:
+    used_candidates = [candidates[i] for i in used_indices]
+
+    model_path = model_path or MODEL_PATH
+    ml_model = load_model(model_path) if os.path.exists(model_path) else None
+    if ml_model is None:
         logger.info("No pre-trained model found, training from behavioral signals...")
-        sigs = [c.get("redrob_signals", {}) for c in candidates]
+        sigs = [c.get("redrob_signals", {}) for c in used_candidates]
         ml_model = train_model(all_features, signals_list=sigs, model_path=model_path)
 
     logger.info("Ranking candidates...")
-    used_candidates = [candidates[i] for i in used_indices]
     ids = [c.get("candidate_id") or str(i) for i, c in enumerate(used_candidates)]
     sigs = [c.get("redrob_signals", {}) for c in used_candidates]
     ranked = rank_candidates(
@@ -440,7 +433,7 @@ def rank(
         feats = id_to_feats.get(cid, {}) or {}
         cand = id_to_candidate.get(cid, {})
         reasoning = generate_reasoning(cid, score, rank_pos, dims, feats, candidate=cand)
-        results.append((cid, rank_pos, round(score, 2), reasoning, dims))
+        results.append((cid, rank_pos, round(score / 100.0, 4), reasoning, dims))
 
     if output_json:
         json_output = []

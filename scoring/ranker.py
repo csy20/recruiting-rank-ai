@@ -654,7 +654,8 @@ def generate_reasoning(
         text = f"{strength_tech}. {strength_beh}."
         if strength_career:
             text += f" {strength_career}."
-        text += f" Caveat: {concern_text}" if concern_text else ""
+        if concern_text:
+            text += f" Caveat: {concern_text}."
         return text
 
     if rank <= 50:
