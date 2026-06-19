@@ -418,80 +418,172 @@ def audit_fairness(
     }
 
 
+def _get_weakest_jd_dimension(
+    dim_scores: dict[str, float],
+    features: dict[str, float],
+) -> str:
+    jd_dims = {
+        "embeddings": "embedding experience",
+        "vector_db": "vector DB experience",
+        "ranking": "ranking systems experience",
+        "ml_production": "ML production experience",
+        "nlp_ir": "NLP/IR experience",
+        "llm": "LLM experience",
+        "python": "Python depth",
+        "distributed_systems": "distributed systems",
+        "data_engineering": "data engineering",
+    }
+    min_dim = None
+    min_val = float("inf")
+    for dim, label in jd_dims.items():
+        val = features.get(f"jd_match_{dim}", 0.0)
+        if val < min_val:
+            min_val = val
+            min_dim = label
+    return min_dim or "technical alignment"
+
+
 def generate_reasoning(
     cid: str,
     score: float,
     rank: int,
     dim_scores: dict[str, float],
     features: dict[str, float],
+    candidate: dict[str, Any] | None = None,
     with_explanation: bool = False,
 ) -> str:
-    parts: list[str] = []
+    profile = (candidate or {}).get("profile") or {}
+    signals = (candidate or {}).get("redrob_signals") or {}
+    career = (candidate or {}).get("career_history") or []
+    first_role = career[0] if career else {}
+    current_title = profile.get("current_title", "") or ""
+    current_company = profile.get("current_company", "") or ""
+    headline = profile.get("headline", "") or ""
+    summary = (profile.get("summary", "") or "")[:200]
 
     tech = dim_scores.get("technical_match", 0.0)
-    if tech > 0.5:
-        retrieval = features.get("retrieval_depth", 0.0)
-        if retrieval > 0.2:
-            parts.append("Strong retrieval/vector search background")
-        else:
-            ai_d = features.get("ai_depth", 0.0)
-            if ai_d > 0.2:
-                parts.append("Solid ML/AI engineering experience")
-            else:
-                parts.append("Relevant technical background")
-    elif tech > 0.25:
-        parts.append("Adjacent technical skills")
-    else:
-        if features.get("entirely_consulting", 0.0):
-            parts.append("Consulting background, limited product ML experience")
-        elif features.get("keyword_diversity", 0.0) < 0.2:
-            parts.append("Narrow technical scope")
-        else:
-            parts.append("Weak technical match to JD")
-
     beh = dim_scores.get("behavioral", 0.0)
-    if beh > 0.7:
-        parts.append("highly engaged on platform")
-    elif beh > 0.4:
-        parts.append("moderate engagement")
-    else:
-        parts.append("low platform activity")
-
-    exp = features.get("years_experience", 0)
-    parts.append(f"{exp:.1f}yr exp")
-
-    edu_level = features.get("education_level", 0.0)
-    if edu_level > 0.8:
-        parts.append("PhD")
-    elif edu_level > 0.5:
-        parts.append("Masters")
-    elif edu_level > 0.2:
-        parts.append("Bachelors")
-
+    career_q = dim_scores.get("career_quality", 0.0)
+    sem = dim_scores.get("semantic_match", 0.0)
+    ret = dim_scores.get("retention", 0.0)
+    exp_years = features.get("years_experience", 0)
+    retrieval = features.get("retrieval_depth", 0.0)
+    ai_d = features.get("ai_depth", 0.0)
     prestige = features.get("company_prestige", 0.0)
-    if prestige >= 1.0:
-        parts.append("top-tier company experience")
-    elif prestige >= 0.7:
-        parts.append("strong company background")
+    edu_level = features.get("education_level", 0.0)
+    entirely_consulting = features.get("entirely_consulting", 0.0)
+    keyword_div = features.get("keyword_diversity", 0.0)
+    is_honeypot = features.get("is_honeypot", 0.0) > 0.5
 
-    certs = features.get("certifications", 0)
-    if certs > 0:
-        parts.append(f"{int(certs)} cert(s)")
+    rrr = signals.get("recruiter_response_rate", 0)
+    o2w = signals.get("open_to_work_flag", False)
 
-    for key in features:
-        if key.startswith("skill_cat_") and features.get(key, 0) > 0:
-            cat = key.replace("skill_cat_", "").replace("_", " ")
-            parts.append(cat)
+    weakness_dim = _get_weakest_jd_dimension(dim_scores, features)
 
-    risk_score = features.get("risk_score", 0.0)
-    if risk_score > 0.3:
-        parts.append("risk flags detected")
+    def _strength_tech():
+        if retrieval > 0.3:
+            return "Strong retrieval/vector search background"
+        if ai_d > 0.3:
+            return "Solid ML/AI engineering depth"
+        if prestige >= 1.0 and tech > 0.5:
+            return f"Top-tier {current_company or ''} ML background with JD-relevant skills".strip()
+        if tech > 0.5:
+            return "Good technical alignment with this JD's ML/retrieval stack"
+        if tech > 0.25:
+            return "Adjacent technical skills with some JD keyword overlap"
+        if keyword_div > 0.3:
+            return "Partial technical match — covers some JD dimensions"
+        return "Weak but non-zero technical signal"
 
-    anti = features.get("anti_pattern_count", 0)
-    if anti > 0:
-        parts.append("buzzword concern")
+    def _strength_beh():
+        if beh > 0.7 and rrr and rrr > 0:
+            return f"Strong platform engagement (response rate {rrr:.0%}, active)"
+        if beh > 0.7:
+            return "Highly engaged on platform with strong signal profile"
+        if beh > 0.5:
+            return "Moderate platform activity with decent engagement metrics"
+        if beh > 0.3:
+            return "Limited platform presence but still reachable"
+        return "Low platform activity — may be slow to respond"
 
-    if features.get("is_honeypot", 0.0) > 0.5:
-        parts.append("HONEYPOT")
+    def _strength_career():
+        parts_s = []
+        if prestige >= 1.0:
+            parts_s.append("top-tier company background")
+        elif prestige >= 0.7:
+            parts_s.append("strong company experience")
+        if career_q > 0.6 and entirely_consulting < 0.5:
+            parts_s.append("solid career progression in relevant domains")
+        if exp_years and 3 <= exp_years <= 12:
+            parts_s.append(f"{exp_years:.0f}yr exp in range")
+        edu_labels = {0.8: "PhD-level", 0.5: "Masters-level", 0.2: "Bachelors-level"}
+        for thr, label in sorted(edu_labels.items(), reverse=True):
+            if edu_level >= thr:
+                parts_s.append(f"{label} education")
+                break
+        return "; ".join(parts_s) if parts_s else ""
 
-    return "; ".join(parts) if parts else "No strong signals"
+    def _concern():
+        parts_c = []
+        if is_honeypot:
+            parts_c.append("HONEYPOT — risk flags triggered")
+            return "; ".join(parts_c)
+        if entirely_consulting > 0.5:
+            parts_c.append("entirely consulting background, lacks product ML exposure")
+        elif keyword_div < 0.2:
+            parts_c.append(f"narrow technical scope — weakest in {weakness_dim}")
+        elif tech < 0.25:
+            parts_c.append(f"weak overall tech match — particularly in {weakness_dim}")
+        else:
+            lowest_score_dim = min(
+                [
+                    (k, v)
+                    for k, v in dim_scores.items()
+                    if k
+                    in (
+                        "technical_match",
+                        "behavioral",
+                        "career_quality",
+                        "retention",
+                        "semantic_match",
+                    )
+                ],
+                key=lambda x: x[1],
+            )
+            dim_label = lowest_score_dim[0].replace("_", " ")
+            parts_c.append(f"relative weakness in {dim_label} ({lowest_score_dim[1]:.2f})")
+        if beh < 0.3:
+            parts_c.append("low platform engagement — response may be delayed")
+        if ret < 0.3:
+            parts_c.append("retention risk from short tenures or long notice period")
+        return "; ".join(parts_c) if parts_c else ""
+
+    concern_text = _concern()
+    strength_tech = _strength_tech()
+    strength_beh = _strength_beh()
+    strength_career = _strength_career()
+
+    if is_honeypot:
+        return f"HONEYPOT — {concern_text}"
+
+    if rank <= 10:
+        text = f"{strength_tech}. {strength_beh}."
+        if strength_career:
+            text += f" {strength_career}."
+        text += f" Caveat: {concern_text}" if concern_text else ""
+        return text
+
+    if rank <= 50:
+        text = f"{strength_tech}. Concern: {concern_text}."
+        if strength_beh:
+            text += f" On the plus side: {strength_beh}."
+        if strength_career:
+            text += f" {strength_career}."
+        return text
+
+    text = f"Key concern: {concern_text}."
+    if strength_tech:
+        text += f" Upside: {strength_tech}."
+    if strength_beh:
+        text += f" {strength_beh}."
+    return text

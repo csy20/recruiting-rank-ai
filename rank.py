@@ -290,10 +290,14 @@ def rank(
 
     logger.info("Generating reasoning...")
     id_to_feats: dict[str, dict[str, float]] = dict(zip(ids, all_features, strict=True))
+    id_to_candidate: dict[str, dict[str, Any]] = {
+        c.get("candidate_id") or str(i): c for i, c in enumerate(candidates)
+    }
     results: list[tuple[str, int, float, str, dict[str, float]]] = []
     for cid, score, rank_pos, dims in ranked[:100]:
         feats = id_to_feats.get(cid, {}) or {}
-        reasoning = generate_reasoning(cid, score, rank_pos, dims, feats)
+        cand = id_to_candidate.get(cid, {})
+        reasoning = generate_reasoning(cid, score, rank_pos, dims, feats, candidate=cand)
         results.append((cid, rank_pos, round(score, 2), reasoning, dims))
 
     if output_json:
