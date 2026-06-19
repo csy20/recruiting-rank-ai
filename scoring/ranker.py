@@ -139,6 +139,8 @@ def _compute_retention(features: dict[str, float]) -> float:
 
 
 def _compute_risk_adjustment(features: dict[str, float]) -> float:
+    if features.get("high_confidence_honeypot", 0.0) > 0.5:
+        return 0.05
     risk = SCORING["risk"]
     risk_score = features.get("risk_score", 0.0)
     anti_patterns = features.get("anti_pattern_count", 0)

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from config import (
@@ -33,18 +33,15 @@ from utils.nlp_utils import (
 )
 
 _SKILL_CATEGORY_PATTERNS: dict[str, Any] = {
-    cat: compile_keyword_patterns(list(terms))
-    for cat, terms in SKILL_CATEGORIES.items()
+    cat: compile_keyword_patterns(list(terms)) for cat, terms in SKILL_CATEGORIES.items()
 }
 
 _EDUCATION_LEVEL_PATTERNS: dict[str, Any] = {
-    level: compile_keyword_patterns(info["keywords"])
-    for level, info in EDUCATION_PATTERNS.items()
+    level: compile_keyword_patterns(info["keywords"]) for level, info in EDUCATION_PATTERNS.items()
 }
 
 _EDUCATION_FIELD_PATTERNS: dict[str, Any] = {
-    field: compile_keyword_patterns(info["keywords"])
-    for field, info in EDUCATION_FIELDS.items()
+    field: compile_keyword_patterns(info["keywords"]) for field, info in EDUCATION_FIELDS.items()
 }
 
 _CERT_PATTERNS = compile_keyword_patterns(CERTIFICATION_PATTERNS)
@@ -292,9 +289,7 @@ def _analyze_career_history(candidate: dict[str, Any]) -> dict[str, Any]:
     normalized_seniority = 0.0
     n = len(seniority_counts)
     if n >= 2:
-        increases = sum(
-            1 for i in range(1, n) if seniority_counts[i] >= seniority_counts[i - 1]
-        )
+        increases = sum(1 for i in range(1, n) if seniority_counts[i] >= seniority_counts[i - 1])
         progression = increases / (n - 1)
     if n > 0:
         normalized_seniority = min(sum(seniority_counts) / n / 2.0, 1.0)
@@ -361,9 +356,7 @@ def _compute_behavioral_score(signals: Any) -> dict[str, float]:
     icr = signals.get("interview_completion_rate", 0.0) or 0.0
     components["interview_completion_rate"] = min(float(icr), 1.0)
 
-    components["open_to_work_flag"] = (
-        1.0 if signals.get("open_to_work_flag", False) else 0.0
-    )
+    components["open_to_work_flag"] = 1.0 if signals.get("open_to_work_flag", False) else 0.0
 
     saved = float(signals.get("saved_by_recruiters_30d", 0) or 0)
     components["saved_by_recruiters_30d"] = min(saved / 20.0, 1.0)
@@ -412,9 +405,7 @@ def _compute_behavioral_score(signals: Any) -> dict[str, float]:
     return components
 
 
-def _compute_retention_score(
-    candidate: dict[str, Any], career: dict[str, Any]
-) -> dict[str, float]:
+def _compute_retention_score(candidate: dict[str, Any], career: dict[str, Any]) -> dict[str, float]:
     avg_tenure = career.get("avg_tenure_months", 0.0) or 0.0
     tenure_years = avg_tenure / 12.0 if avg_tenure > 0 else 0.0
 
@@ -433,13 +424,9 @@ def _compute_retention_score(
         ratio = short_stint_count / role_count
         job_hop_penalty = min(ratio, 1.0) * 0.5
 
-    notice_period_str = candidate.get("redrob_signals", {}).get(
-        "notice_period_days", 30
-    )
+    notice_period_str = candidate.get("redrob_signals", {}).get("notice_period_days", 30)
     try:
-        notice_period = (
-            float(notice_period_str) if notice_period_str is not None else 30.0
-        )
+        notice_period = float(notice_period_str) if notice_period_str is not None else 30.0
     except (ValueError, TypeError):
         notice_period = 30.0
     if notice_period < 30:
@@ -447,9 +434,7 @@ def _compute_retention_score(
     notice_score = max(0.0, 1.0 - (notice_period - 30) / 150.0)
 
     stability_score = max(0.0, 1.0 - job_hop_penalty)
-    overall = max(
-        0.0, min(1.0, 0.6 * tenure_score + 0.4 * stability_score - job_hop_penalty)
-    )
+    overall = max(0.0, min(1.0, 0.6 * tenure_score + 0.4 * stability_score - job_hop_penalty))
 
     return {
         "tenure_score": tenure_score,
@@ -487,9 +472,7 @@ def _detect_honeypot(candidate: dict[str, Any]) -> dict[str, Any]:
     total_exp_years = float(exp_years_profile.get("years_of_experience", 0) or 0)
     total_exp_months = total_exp_years * 12
 
-    expert_skills = [
-        s for s in skills if isinstance(s, dict) and s.get("proficiency") == "expert"
-    ]
+    expert_skills = [s for s in skills if isinstance(s, dict) and s.get("proficiency") == "expert"]
     low_duration_expert = [
         s
         for s in expert_skills
@@ -593,9 +576,7 @@ def _compute_skill_categories(skills: list[str]) -> dict[str, float]:
     result = {}
     combined = " ".join(skills)
     for category, patterns in _SKILL_CATEGORY_PATTERNS.items():
-        result[f"skill_cat_{category}"] = float(
-            count_pattern_matches(combined, patterns)
-        )
+        result[f"skill_cat_{category}"] = float(count_pattern_matches(combined, patterns))
     return result
 
 
@@ -615,6 +596,124 @@ def _compute_growth_rate(career: dict[str, Any]) -> float:
     if years <= 0:
         return 0.5
     return min(seniority * 2.0 / years, 1.0)
+
+
+def _check_date_overlap(roles: list[dict]) -> bool:
+    date_ranges = []
+    for role in roles:
+        if not isinstance(role, dict):
+            continue
+        start = role.get("start_date", "") or ""
+        end = role.get("end_date", "") or ""
+        if not start:
+            continue
+        try:
+            s = datetime.strptime(str(start)[:10], "%Y-%m-%d").date()
+            e = datetime.strptime(str(end)[:10], "%Y-%m-%d").date() if end else date.today()
+            date_ranges.append((s, e))
+        except (ValueError, TypeError):
+            continue
+    for i in range(len(date_ranges)):
+        for j in range(i + 1, len(date_ranges)):
+            s1, e1 = date_ranges[i]
+            s2, e2 = date_ranges[j]
+            if s1 <= e2 and s2 <= e1:
+                return True
+    return False
+
+
+def detect_honeypot_signals(candidate: dict[str, Any]) -> float:
+    score = 0.0
+    skills = candidate.get("skills") or []
+    profile = candidate.get("profile") or {}
+    signals = candidate.get("redrob_signals") or {}
+
+    expert_zero_dur = sum(
+        1
+        for s in skills
+        if isinstance(s, dict)
+        and s.get("proficiency") == "expert"
+        and (s.get("duration_months", 0) or 0) == 0
+    )
+    if expert_zero_dur >= 3:
+        score += 0.4
+    elif expert_zero_dur >= 1:
+        score += 0.15
+
+    total_career_months = sum(
+        (r.get("duration_months", 0) or 0)
+        for r in (candidate.get("career_history") or [])
+        if isinstance(r, dict)
+    )
+    exp_years = float(profile.get("years_of_experience", 0) or 0)
+    max_expected = (exp_years + 3) * 12
+    if total_career_months > max_expected and max_expected > 0:
+        score += 0.35
+
+    career_roles = candidate.get("career_history") or []
+    if _check_date_overlap(career_roles):
+        score += 0.25
+
+    pcs = float(signals.get("profile_completeness_score", 0) or 0)
+    gh = float(signals.get("github_activity_score", -1) or -1)
+    conn = int(signals.get("connection_count", 0) or 0)
+    if pcs == 100.0 and gh == 100.0 and conn > 5000:
+        score += 0.20
+
+    return min(score, 1.0)
+
+
+def detect_disqualifiers(
+    candidate: dict[str, Any],
+) -> dict[str, bool]:
+    result = {
+        "title_chaser": False,
+        "consulting_only": False,
+        "manager_no_code": False,
+        "wrong_domain": False,
+    }
+    roles = candidate.get("career_history") or []
+    profile = candidate.get("profile") or {}
+
+    recent_roles = [r for r in roles if isinstance(r, dict)]
+    if len(recent_roles) >= 3:
+        avg_dur = sum(r.get("duration_months", 0) or 0 for r in recent_roles) / len(recent_roles)
+        if avg_dur < 18:
+            result["title_chaser"] = True
+
+    companies = set()
+    for r in recent_roles:
+        c = (r.get("company", "") or "").lower().strip()
+        if c:
+            companies.add(c)
+    if companies and companies.issubset(CONSULTING_COMPANIES):
+        result["consulting_only"] = True
+
+    current_title = (profile.get("current_title", "") or "").lower()
+    mgr_keywords = [
+        "vp ",
+        "vice president",
+        "director",
+        "head of",
+        "chief ",
+        "manager",
+        "president",
+    ]
+    if any(kw in current_title for kw in mgr_keywords):
+        result["manager_no_code"] = True
+
+    cv_domains = {"computer vision", "speech", "robotics", "slam"}
+    nlpr_domains = {"nlp", "retrieval", "ranking", "embedding", "search"}
+    all_text = " ".join(
+        ((r.get("description", "") or "") + " " + (r.get("title", "") or "")).lower()
+        for r in recent_roles
+    )
+    has_cv = any(kw in all_text for kw in cv_domains)
+    has_nlpr = any(kw in all_text for kw in nlpr_domains)
+    if has_cv and not has_nlpr:
+        result["wrong_domain"] = True
+
+    return result
 
 
 def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
@@ -681,6 +780,14 @@ def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
         features[f"ret_{k}"] = v
     features["risk_score"] = honeypot["risk_score"]
     features["is_honeypot"] = 1.0 if honeypot["is_honeypot"] else 0.0
+    honeypot_signal = detect_honeypot_signals(candidate)
+    features["honeypot_signal_score"] = honeypot_signal
+    features["high_confidence_honeypot"] = 1.0 if honeypot_signal > 0.5 else 0.0
+    disqualifiers = detect_disqualifiers(candidate)
+    features["disq_title_chaser"] = 1.0 if disqualifiers["title_chaser"] else 0.0
+    features["disq_consulting_only"] = 1.0 if disqualifiers["consulting_only"] else 0.0
+    features["disq_manager_no_code"] = 1.0 if disqualifiers["manager_no_code"] else 0.0
+    features["disq_wrong_domain"] = 1.0 if disqualifiers["wrong_domain"] else 0.0
     features["education_level"] = education["education_level"]
     features["education_field"] = education["education_field"]
     features["certifications"] = certifications
