@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import csv
-import functools
 import json
 import logging
 import os
@@ -69,7 +68,6 @@ def _get_candidate_text(candidate: dict[str, Any]) -> str:
     return _get_combined_text(candidate)
 
 
-@functools.lru_cache(maxsize=1)
 def _get_sentence_transformer():
     from sentence_transformers import SentenceTransformer
 
@@ -77,24 +75,93 @@ def _get_sentence_transformer():
     return SentenceTransformer(SENTENCE_TRANSFORMER_MODEL)
 
 
+def _precompute_embeddings(
+    candidates: list[dict[str, Any]],
+    out_dir: str,
+) -> np.ndarray:
+    texts = [_get_candidate_text(c) for c in candidates]
+    logger.info("Encoding %d candidates with sentence-transformers...", len(texts))
+    t0 = time.time()
+    model = _get_sentence_transformer()
+    embs = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    logger.info("Encoded %d embeddings in %.1fs, shape=%s", len(embs), time.time() - t0, embs.shape)
+
+    emb_path = os.path.join(out_dir, "candidate_embeddings.npy")
+    np.save(emb_path, embs)
+    logger.info("Saved embeddings to %s", emb_path)
+
+    emb_ids_path = os.path.join(out_dir, "embedding_ids.csv")
+    with open(emb_ids_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["candidate_id", "embedding_index"])
+        for i, c in enumerate(candidates):
+            w.writerow([c.get("candidate_id") or str(i), i])
+    logger.info("Saved embedding IDs to %s (%d entries)", emb_ids_path, len(candidates))
+    return embs
+
+
+def _build_bm25_index(candidates: list[dict[str, Any]]) -> Any:
+    from rank_bm25 import BM25Okapi
+
+    texts = [_get_candidate_text(c) for c in candidates]
+    tokenized = [t.lower().split() for t in texts]
+    logger.info("Building BM25 index on %d candidates...", len(tokenized))
+    t0 = time.time()
+    bm25 = BM25Okapi(tokenized)
+    logger.info("BM25 index built in %.1fs", time.time() - t0)
+    return bm25
+
+
+def _bm25_prefilter(
+    bm25: Any,
+    candidates: list[dict[str, Any]],
+    query: str,
+    top_k: int = 5000,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    tokenized_query = query.lower().split()
+    scores = bm25.get_scores(tokenized_query)
+    top_indices = np.argsort(scores)[::-1][:top_k]
+    top_candidates = [candidates[i] for i in top_indices]
+    logger.info("BM25 prefilter: %d -> %d candidates", len(candidates), len(top_candidates))
+    return list(top_indices), top_candidates
+
+
+def _dense_rerank(
+    query_emb: np.ndarray,
+    candidate_embs: np.ndarray,
+    indices: list[int],
+    top_k: int = 2000,
+) -> list[int]:
+    selected = candidate_embs[indices]
+    sims = cosine_similarity(query_emb.reshape(1, -1), selected).flatten()
+    reranked_order = np.argsort(sims)[::-1][:top_k]
+    return [indices[i] for i in reranked_order]
+
+
 def _compute_semantic_features(
     candidates: list[dict[str, Any]],
     all_texts: list[str],
     jd_text: str,
+    precomputed_dir: str | None = None,
+    orig_indices: list[int] | None = None,
 ) -> list[float]:
-    logger.info("Computing semantic similarity features (%d candidates)...", len(all_texts))
-    if not all_texts:
-        return []
+    logger.info("Computing semantic similarity features...")
+
+    if precomputed_dir and orig_indices is not None:
+        emb_path = os.path.join(precomputed_dir, "candidate_embeddings.npy")
+        if os.path.exists(emb_path):
+            candidate_embs = np.load(emb_path)
+            logger.info("Loaded precomputed embeddings: %s", candidate_embs.shape)
+            model = _get_sentence_transformer()
+            jd_emb = model.encode([jd_text], show_progress_bar=False, normalize_embeddings=True)
+            selected = candidate_embs[orig_indices]
+            sims = cosine_similarity(jd_emb, selected).flatten()
+            return [float(s) for s in sims]
+
     model = _get_sentence_transformer()
-    jd_emb = model.encode([jd_text], show_progress_bar=False)
-    candidate_embs = model.encode(all_texts, show_progress_bar=False)
+    jd_emb = model.encode([jd_text], show_progress_bar=False, normalize_embeddings=True)
+    candidate_embs = model.encode(all_texts, show_progress_bar=False, normalize_embeddings=True)
     similarities = cosine_similarity(candidate_embs, jd_emb).flatten()
-    if len(similarities) > 0:
-        logger.info(
-            "Semantic similarity range: [%.4f, %.4f]",
-            float(similarities.min()),
-            float(similarities.max()),
-        )
     return [float(s) for s in similarities]
 
 
@@ -140,6 +207,20 @@ def _extract_all(
     return [results_map[i] for i in range(n)]
 
 
+def _load_embeddings(precomputed_dir: str) -> tuple[np.ndarray | None, dict[str, int] | None]:
+    emb_path = os.path.join(precomputed_dir, "candidate_embeddings.npy")
+    id_path = os.path.join(precomputed_dir, "embedding_ids.csv")
+    if os.path.exists(emb_path) and os.path.exists(id_path):
+        embs = np.load(emb_path)
+        id_to_idx: dict[str, int] = {}
+        with open(id_path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                id_to_idx[row["candidate_id"]] = int(row["embedding_index"])
+        return embs, id_to_idx
+    return None, None
+
+
 def precompute(
     path: str,
     out_dir: str,
@@ -154,6 +235,8 @@ def precompute(
         return
     logger.info("Loaded %d candidates in %.1fs", len(candidates), time.time() - t0)
 
+    os.makedirs(out_dir, exist_ok=True)
+
     ids: list[str] = []
     all_features: list[dict[str, float]] = []
 
@@ -162,6 +245,8 @@ def precompute(
     for cid, feats in extracted:
         ids.append(cid)
         all_features.append(feats)
+
+    _precompute_embeddings(candidates, out_dir)
 
     jd_text = _load_jd_text(jd_path) if jd_path else _build_jd_text()
     if jd_text:
@@ -184,7 +269,6 @@ def precompute(
                 val = 0.0
             feature_matrix[i, j] = float(val)
 
-    os.makedirs(out_dir, exist_ok=True)
     npz_path = os.path.join(out_dir, "features.npz")
     np.savez_compressed(npz_path, features=feature_matrix, keys=feature_keys)
     logger.info("Saved features to %s", npz_path)
@@ -230,8 +314,12 @@ def rank(
     else:
         jd_weights = None
 
+    precomputed = precomputed_dir and os.path.exists(os.path.join(precomputed_dir, "features.npz"))
     all_features: list[dict[str, float]] = []
-    if precomputed_dir and os.path.exists(os.path.join(precomputed_dir, "features.npz")):
+    # Track which original candidate indices made it through the pipeline
+    used_indices: list[int] = []
+
+    if precomputed:
         logger.info("Loading precomputed features...")
         npz = np.load(os.path.join(precomputed_dir, "features.npz"))
         feature_matrix = npz["features"]
@@ -242,7 +330,26 @@ def rank(
             with open(meta_path) as f:
                 reader = csv.DictReader(f)
                 id_to_idx = {row["candidate_id"]: int(row["feature_index"]) for row in reader}
-            for c in candidates:
+
+            # Two-stage retrieval: BM25 -> dense -> full scoring
+            ref_text = jd_text_loaded or _build_jd_text()
+            bm25 = _build_bm25_index(candidates)
+            bm25_indices, bm25_cands = _bm25_prefilter(bm25, candidates, ref_text, top_k=5000)
+
+            emb, emb_id_map = _load_embeddings(precomputed_dir)
+            if emb is not None:
+                model = _get_sentence_transformer()
+                jd_emb = model.encode(
+                    [ref_text], show_progress_bar=False, normalize_embeddings=True
+                )
+                dense_indices = _dense_rerank(jd_emb, emb, bm25_indices, top_k=2000)
+            else:
+                dense_indices = bm25_indices[:2000]
+
+            used_indices = dense_indices
+
+            for orig_idx in dense_indices:
+                c = candidates[orig_idx]
                 cid = c.get("candidate_id")
                 if cid in id_to_idx:
                     idx = id_to_idx[cid]
@@ -253,15 +360,22 @@ def rank(
                     all_features.append(feats)
                 else:
                     all_features.append(extract_all_features(c))
+            logger.info(
+                "Two-stage retrieval selected %d candidates (BM25->%d, dense->%d)",
+                len(all_features),
+                len(bm25_indices),
+                len(dense_indices),
+            )
         else:
-            for c in candidates:
-                all_features.append(extract_all_features(c))
-        logger.info("Loaded features for %d candidates", len(all_features))
+            logger.info("No metadata csv, extracting features for all candidates...")
+            extracted = _extract_all(candidates)
+            all_features = [feats for _, feats in extracted]
+            used_indices = list(range(len(candidates)))
     else:
         logger.info("Extracting features on the fly...")
         extracted = _extract_all(candidates)
         all_features = [feats for _, feats in extracted]
-        logger.info("Extracted features for %d candidates", len(all_features))
+        used_indices = list(range(len(candidates)))
 
     if not all_features:
         logger.warning("No features available for ranking!")
@@ -269,8 +383,16 @@ def rank(
 
     ref_text = jd_text_loaded or _build_jd_text()
     if ref_text and "semantic_similarity" not in all_features[0]:
-        candidate_texts = [_get_candidate_text(c) for c in candidates]
-        semantic_scores = _compute_semantic_features(candidates, candidate_texts, ref_text)
+        used_candidates = [candidates[i] for i in used_indices]
+        candidate_texts = [_get_candidate_text(c) for c in used_candidates]
+        emb_dir = precomputed_dir if precomputed else None
+        semantic_scores = _compute_semantic_features(
+            used_candidates,
+            candidate_texts,
+            ref_text,
+            precomputed_dir=emb_dir,
+            orig_indices=used_indices,
+        )
         for i, sim in enumerate(semantic_scores):
             if i < len(all_features):
                 all_features[i]["semantic_similarity"] = sim
@@ -278,14 +400,19 @@ def rank(
     ml_model = load_model(model_path) if model_path and os.path.exists(model_path) else None
     if model_path and ml_model is None:
         logger.info("No pre-trained model found, training from behavioral signals...")
-        signals_list = [c.get("redrob_signals", {}) for c in candidates]
-        ml_model = train_model(all_features, signals_list=signals_list, model_path=model_path)
+        sigs = [c.get("redrob_signals", {}) for c in candidates]
+        ml_model = train_model(all_features, signals_list=sigs, model_path=model_path)
 
     logger.info("Ranking candidates...")
-    ids = [c.get("candidate_id") or str(i) for i, c in enumerate(candidates)]
-    sigs = [c.get("redrob_signals", {}) for c in candidates]
+    used_candidates = [candidates[i] for i in used_indices]
+    ids = [c.get("candidate_id") or str(i) for i, c in enumerate(used_candidates)]
+    sigs = [c.get("redrob_signals", {}) for c in used_candidates]
     ranked = rank_candidates(
-        ids, all_features, jd_weights=jd_weights, ml_model=ml_model, signals_list=sigs
+        ids,
+        all_features,
+        jd_weights=jd_weights,
+        ml_model=ml_model,
+        signals_list=sigs,
     )
 
     logger.info("Calibrating scores...")
@@ -294,7 +421,7 @@ def rank(
     logger.info("Generating reasoning...")
     id_to_feats: dict[str, dict[str, float]] = dict(zip(ids, all_features, strict=True))
     id_to_candidate: dict[str, dict[str, Any]] = {
-        c.get("candidate_id") or str(i): c for i, c in enumerate(candidates)
+        c.get("candidate_id") or str(i): c for i, c in enumerate(used_candidates)
     }
     results: list[tuple[str, int, float, str, dict[str, float]]] = []
     for cid, score, rank_pos, dims in ranked[:100]:
@@ -355,7 +482,8 @@ def rank(
         for cid, rank_pos, score, reasoning, _dims in results:
             writer.writerow([cid, rank_pos, f"{score:.4f}", reasoning])
 
-    logger.info("Done in %.1fs", time.time() - t0)
+    elapsed = time.time() - t0
+    logger.info("Done in %.1fs", elapsed)
 
 
 def serve(host: str, port: int, model_path: str | None = None):
@@ -381,7 +509,7 @@ def main():
     parser.add_argument(
         "--jd",
         default=None,
-        help="Path to JD description text file for TF-IDF similarity scoring",
+        help="Path to JD description text file for similarity scoring",
     )
     parser.add_argument(
         "--train",
