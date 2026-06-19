@@ -165,6 +165,18 @@ def _compute_semantic_features(
     return [float(s) for s in similarities]
 
 
+_WORKER_MODEL = None
+
+
+def _get_worker_model():
+    global _WORKER_MODEL
+    if _WORKER_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+
+        _WORKER_MODEL = SentenceTransformer(SENTENCE_TRANSFORMER_MODEL)
+    return _WORKER_MODEL
+
+
 def _extract_single(
     args: tuple[dict[str, Any], int, int],
 ) -> tuple[str, dict[str, float]]:
