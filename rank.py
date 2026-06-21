@@ -80,8 +80,12 @@ def _precompute_embeddings(
     candidates: list[dict[str, Any]],
     out_dir: str,
 ) -> np.ndarray:
-    texts = [_get_candidate_text(c) for c in candidates]
-    logger.info("Encoding %d candidates with sentence-transformers...", len(texts))
+    texts = ["passage: " + _get_candidate_text(c) for c in candidates]
+    logger.info(
+        "Encoding %d candidates with sentence-transformers (%s)...",
+        len(texts),
+        SENTENCE_TRANSFORMER_MODEL,
+    )
     t0 = time.time()
     model = _get_sentence_transformer()
     embs = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
@@ -90,6 +94,17 @@ def _precompute_embeddings(
     emb_path = os.path.join(out_dir, "candidate_embeddings.npy")
     np.save(emb_path, embs)
     logger.info("Saved embeddings to %s", emb_path)
+
+    cid_order = np.array(
+        [c.get("candidate_id") or str(i) for i, c in enumerate(candidates)],
+        dtype=object,
+    )
+    np.save(os.path.join(out_dir, "candidate_id_order.npy"), cid_order)
+    logger.info(
+        "Saved candidate ID order to %s (%d entries)",
+        os.path.join(out_dir, "candidate_id_order.npy"),
+        len(cid_order),
+    )
 
     emb_ids_path = os.path.join(out_dir, "embedding_ids.csv")
     with open(emb_ids_path, "w", newline="") as f:
@@ -283,6 +298,8 @@ def precompute(
         for i, cid in enumerate(ids):
             w.writerow([cid, i])
     logger.info("Saved metadata to %s", meta_path)
+
+    _precompute_embeddings(candidates, out_dir)
 
     if train:
         logger.info("Training ML model on behavioral signals...")

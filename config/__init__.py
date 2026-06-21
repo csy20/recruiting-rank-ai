@@ -157,7 +157,7 @@ JD_KEYWORDS = {
     },
 }
 
-SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
+SENTENCE_TRANSFORMER_MODEL = "intfloat/e5-small-v2"
 
 BEHAVIORAL_WEIGHTS = {
     "recruiter_response_rate": 0.20,
