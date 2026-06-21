@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
+import scipy.stats
 from sklearn.metrics.pairwise import cosine_similarity
 
 from config import (
@@ -31,6 +32,7 @@ from scoring.ranker import (
     rank_candidates,
     train_model,
 )
+from scoring.skill_graph import compute_concept_boost
 
 logging.basicConfig(
     level=logging.INFO,
@@ -128,32 +130,6 @@ def _build_bm25_index(candidates: list[dict[str, Any]]) -> Any:
     return bm25
 
 
-def _bm25_prefilter(
-    bm25: Any,
-    candidates: list[dict[str, Any]],
-    query: str,
-    top_k: int = 5000,
-) -> tuple[list[int], list[dict[str, Any]]]:
-    tokenized_query = query.lower().split()
-    scores = bm25.get_scores(tokenized_query)
-    top_indices = np.argsort(scores)[::-1][:top_k]
-    top_candidates = [candidates[i] for i in top_indices]
-    logger.info("BM25 prefilter: %d -> %d candidates", len(candidates), len(top_candidates))
-    return list(top_indices), top_candidates
-
-
-def _dense_rerank(
-    query_emb: np.ndarray,
-    candidate_embs: np.ndarray,
-    indices: list[int],
-    top_k: int = 2000,
-) -> list[int]:
-    selected = candidate_embs[indices]
-    sims = cosine_similarity(query_emb.reshape(1, -1), selected).flatten()
-    reranked_order = np.argsort(sims)[::-1][:top_k]
-    return [indices[i] for i in reranked_order]
-
-
 def _compute_semantic_features(
     candidates: list[dict[str, Any]],
     all_texts: list[str],
@@ -235,18 +211,13 @@ def _extract_all(
     return [results_map[i] for i in range(n)]
 
 
-def _load_embeddings(precomputed_dir: str) -> tuple[np.ndarray | None, dict[str, int] | None]:
+def _load_embeddings(precomputed_dir: str | None) -> np.ndarray | None:
+    if not precomputed_dir:
+        return None
     emb_path = os.path.join(precomputed_dir, "candidate_embeddings.npy")
-    id_path = os.path.join(precomputed_dir, "embedding_ids.csv")
-    if os.path.exists(emb_path) and os.path.exists(id_path):
-        embs = np.load(emb_path)
-        id_to_idx: dict[str, int] = {}
-        with open(id_path) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                id_to_idx[row["candidate_id"]] = int(row["embedding_index"])
-        return embs, id_to_idx
-    return None, None
+    if os.path.exists(emb_path):
+        return np.load(emb_path)
+    return None
 
 
 def precompute(
@@ -323,7 +294,8 @@ def rank(
     if not candidates:
         logger.warning("No candidates loaded!")
         return
-    logger.info("Loaded %d candidates in %.1fs", len(candidates), time.time() - t0)
+    n_total = len(candidates)
+    logger.info("Loaded %d candidates in %.1fs", n_total, time.time() - t0)
 
     jd_profile = None
     jd_text_loaded = _load_jd_text(jd_path) if jd_path else None
@@ -334,13 +306,105 @@ def rank(
     else:
         jd_weights = None
 
+    ref_text = jd_text_loaded or _build_jd_text()
+
+    # ====================================================================
+    # STAGE 1 — BM25 scoring over ALL candidates (no prefilter)
+    # ====================================================================
+    stage_times: dict[str, float] = {}
+    t1 = time.time()
+    bm25 = _build_bm25_index(candidates)
+    tokenized_query = ref_text.lower().split()
+    bm25_scores = np.array(bm25.get_scores(tokenized_query))
+    bm25_ranks = scipy.stats.rankdata(-bm25_scores, method="average")
+    stage_times["bm25_full"] = time.time() - t1
+    logger.info("STAGE 1 — BM25 scored %d candidates in %.2fs", n_total, stage_times["bm25_full"])
+
+    # ====================================================================
+    # STAGE 2 — Dense cosine similarity over ALL candidates
+    # ====================================================================
+    t2 = time.time()
+    model = _get_sentence_transformer()
+    jd_query = "query: " + ref_text
+    jd_emb = model.encode([jd_query], show_progress_bar=False, normalize_embeddings=True)
+
+    candidate_embs = _load_embeddings(precomputed_dir)
+    if candidate_embs is None:
+        logger.info("No precomputed embeddings — encoding %d candidates on the fly", n_total)
+        cand_texts = ["passage: " + _get_candidate_text(c) for c in candidates]
+        candidate_embs = model.encode(
+            cand_texts, show_progress_bar=False, normalize_embeddings=True
+        )
+    else:
+        logger.info("Loaded precomputed embeddings: %s", candidate_embs.shape)
+        if candidate_embs.shape[0] != n_total:
+            logger.warning(
+                "Embedding count (%d) != candidate count (%d) — re-encoding",
+                candidate_embs.shape[0],
+                n_total,
+            )
+            cand_texts = ["passage: " + _get_candidate_text(c) for c in candidates]
+            candidate_embs = model.encode(
+                cand_texts, show_progress_bar=False, normalize_embeddings=True
+            )
+
+    dense_sims = cosine_similarity(jd_emb, candidate_embs).flatten()
+    dense_ranks = scipy.stats.rankdata(-dense_sims, method="average")
+    stage_times["dense_full"] = time.time() - t2
+    logger.info("STAGE 2 — Dense scored %d candidates in %.2fs", n_total, stage_times["dense_full"])
+
+    # ====================================================================
+    # STAGE 3 — RRF fusion (Reciprocal Rank Fusion, k=60)
+    # ====================================================================
+    t3 = time.time()
+    k = 60
+    rrf_scores = 1.0 / (k + bm25_ranks) + 1.0 / (k + dense_ranks)
+    rrf_min, rrf_max = float(rrf_scores.min()), float(rrf_scores.max())
+    if rrf_max > rrf_min:
+        rrf_norm = (rrf_scores - rrf_min) / (rrf_max - rrf_min)
+    else:
+        rrf_norm = np.zeros_like(rrf_scores)
+    stage_times["rrf_fusion"] = time.time() - t3
+    logger.info(
+        "STAGE 3 — RRF fusion (k=%d) in %.2fs (norm range: %.4f-%.4f)",
+        k,
+        stage_times["rrf_fusion"],
+        float(rrf_norm.min()),
+        float(rrf_norm.max()),
+    )
+
+    # ====================================================================
+    # STAGE 4 — Concept graph boost
+    # ====================================================================
+    t4 = time.time()
+    concept_boosts = np.array(
+        [compute_concept_boost(ref_text, _get_candidate_text(c)) for c in candidates],
+        dtype=np.float32,
+    )
+    stage_times["concept_boost"] = time.time() - t4
+    logger.info("STAGE 4 — Concept boost computed in %.2fs", stage_times["concept_boost"])
+
+    # ====================================================================
+    # STAGE 5 — Combined semantic score + select top-K
+    # ====================================================================
+    semantic_match = rrf_norm + concept_boosts
+    top_k = min(2000, n_total)
+    top_indices = np.argsort(-semantic_match)[:top_k]
+    used_indices: list[int] = list(top_indices)
+    logger.info(
+        "Selected top %d/%d by RRF+concept fusion",
+        top_k,
+        n_total,
+    )
+
+    # ====================================================================
+    # STAGE 6 — 7-dim feature extraction + scoring on top-K subset
+    # ====================================================================
+    t5 = time.time()
     precomputed = precomputed_dir and os.path.exists(os.path.join(precomputed_dir, "features.npz"))
     all_features: list[dict[str, float]] = []
-    # Track which original candidate indices made it through the pipeline
-    used_indices: list[int] = []
 
     if precomputed:
-        logger.info("Loading precomputed features...")
         npz = np.load(os.path.join(precomputed_dir, "features.npz"))
         feature_matrix = npz["features"]
         feature_keys = list(npz["keys"])
@@ -351,24 +415,7 @@ def rank(
                 reader = csv.DictReader(f)
                 id_to_idx = {row["candidate_id"]: int(row["feature_index"]) for row in reader}
 
-            # Two-stage retrieval: BM25 -> dense -> full scoring
-            ref_text = jd_text_loaded or _build_jd_text()
-            bm25 = _build_bm25_index(candidates)
-            bm25_indices, bm25_cands = _bm25_prefilter(bm25, candidates, ref_text, top_k=5000)
-
-            emb, emb_id_map = _load_embeddings(precomputed_dir)
-            if emb is not None:
-                model = _get_sentence_transformer()
-                jd_emb = model.encode(
-                    [ref_text], show_progress_bar=False, normalize_embeddings=True
-                )
-                dense_indices = _dense_rerank(jd_emb, emb, bm25_indices, top_k=2000)
-            else:
-                dense_indices = bm25_indices[:2000]
-
-            used_indices = dense_indices
-
-            for orig_idx in dense_indices:
+            for orig_idx in top_indices:
                 c = candidates[orig_idx]
                 cid = c.get("candidate_id")
                 if cid in id_to_idx:
@@ -377,46 +424,37 @@ def rank(
                         feature_keys[j]: float(feature_matrix[idx, j])
                         for j in range(len(feature_keys))
                     }
-                    all_features.append(feats)
                 else:
-                    all_features.append(extract_all_features(c))
-            logger.info(
-                "Two-stage retrieval selected %d candidates (BM25->%d, dense->%d)",
-                len(all_features),
-                len(bm25_indices),
-                len(dense_indices),
-            )
+                    feats = extract_all_features(c)
+                feats["semantic_similarity"] = float(semantic_match[orig_idx])
+                all_features.append(feats)
         else:
-            logger.info("No metadata csv, extracting features for all candidates...")
-            extracted = _extract_all(candidates)
-            all_features = [feats for _, feats in extracted]
-            used_indices = list(range(len(candidates)))
+            for orig_idx in top_indices:
+                feats = extract_all_features(candidates[orig_idx])
+                feats["semantic_similarity"] = float(semantic_match[orig_idx])
+                all_features.append(feats)
     else:
-        logger.info("Extracting features on the fly...")
-        extracted = _extract_all(candidates)
-        all_features = [feats for _, feats in extracted]
-        used_indices = list(range(len(candidates)))
+        logger.info("Extracting features for top %d on the fly...", len(top_indices))
+        top_candidates = [candidates[i] for i in top_indices]
+        extracted = _extract_all(top_candidates)
+        for i, (_cid, feats) in enumerate(extracted):
+            feats["semantic_similarity"] = float(semantic_match[top_indices[i]])
+            all_features.append(feats)
+
+    stage_times["scoring_topk"] = time.time() - t5
+    logger.info(
+        "STAGE 6 — 7-dim scoring prepped for %d candidates in %.2fs",
+        len(all_features),
+        stage_times["scoring_topk"],
+    )
 
     if not all_features:
         logger.warning("No features available for ranking!")
         return
 
-    ref_text = jd_text_loaded or _build_jd_text()
-    if ref_text and "semantic_similarity" not in all_features[0]:
-        used_candidates = [candidates[i] for i in used_indices]
-        candidate_texts = [_get_candidate_text(c) for c in used_candidates]
-        emb_dir = precomputed_dir if precomputed else None
-        semantic_scores = _compute_semantic_features(
-            used_candidates,
-            candidate_texts,
-            ref_text,
-            precomputed_dir=emb_dir,
-            orig_indices=used_indices,
-        )
-        for i, sim in enumerate(semantic_scores):
-            if i < len(all_features):
-                all_features[i]["semantic_similarity"] = sim
-
+    # ====================================================================
+    # STAGE 7 — ML model, ranking, calibration, reasoning, output
+    # ====================================================================
     used_candidates = [candidates[i] for i in used_indices]
 
     model_path = model_path or MODEL_PATH
@@ -504,7 +542,17 @@ def rank(
         for cid, rank_pos, score, reasoning, _dims in results:
             writer.writerow([cid, rank_pos, f"{score:.4f}", reasoning])
 
+    # Performance report
     elapsed = time.time() - t0
+    total_stages = sum(stage_times.values())
+    logger.info("=" * 60)
+    logger.info("PERFORMANCE TIMING REPORT")
+    logger.info("=" * 60)
+    for stage_name, stage_dur in sorted(stage_times.items()):
+        logger.info("  %-20s: %7.2fs", stage_name, stage_dur)
+    logger.info("  %-20s: %7.2fs", "stages_total", total_stages)
+    logger.info("  %-20s: %7.2fs", "wall_clock", elapsed)
+    logger.info("=" * 60)
     logger.info("Done in %.1fs", elapsed)
 
 
