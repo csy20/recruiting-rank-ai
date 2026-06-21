@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml",
     "fastapi",
     "uvicorn",
+    "flashtext",
 ]
 
 [project.scripts]
@@ -48,6 +49,7 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "scoring/ranker.py" = ["N806"]
+"scripts/pool_review.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

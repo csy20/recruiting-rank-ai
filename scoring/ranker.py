@@ -235,12 +235,18 @@ def compute_availability_multiplier(
     return max(multiplier, 0.35)
 
 
+_RULE_BASE_DIMS: dict[str, float] = {
+    k: v for k, v in DIMENSION_WEIGHTS.items() if k != "behavioral"
+}
+
+
 def compute_final_score(
     dim_scores: dict[str, float],
     ml_score: float | None = None,
 ) -> float:
+    weights = _RULE_BASE_DIMS if ml_score is not None else DIMENSION_WEIGHTS
     score = 0.0
-    for dim, weight in DIMENSION_WEIGHTS.items():
+    for dim, weight in weights.items():
         val = dim_scores.get(dim, 0.0)
         if val is None:
             val = 0.0

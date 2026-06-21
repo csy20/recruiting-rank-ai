@@ -78,6 +78,35 @@ def _get_sentence_transformer():
     return SentenceTransformer(SENTENCE_TRANSFORMER_MODEL)
 
 
+def _encode_with_chunking(
+    texts: list[str],
+    model: Any,
+    normalize: bool = True,
+) -> np.ndarray:
+    """Encode texts with chunk+mean-pool to avoid 512-token truncation."""
+    max_len = 510
+    result = []
+    for text in texts:
+        tokens = model.tokenizer.encode(text, truncation=False)
+        if len(tokens) <= max_len:
+            emb = model.encode([text], show_progress_bar=False, normalize_embeddings=normalize)
+            result.append(emb[0])
+        else:
+            chunks = []
+            for i in range(0, len(tokens), max_len):
+                chunk_tokens = tokens[i : i + max_len]
+                chunk_text = model.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+                chunks.append(chunk_text)
+            chunk_embs = model.encode(chunks, show_progress_bar=False, normalize_embeddings=False)
+            pooled = np.mean(chunk_embs, axis=0)
+            if normalize:
+                norm = np.linalg.norm(pooled)
+                if norm > 0:
+                    pooled = pooled / norm
+            result.append(pooled)
+    return np.array(result)
+
+
 def _precompute_embeddings(
     candidates: list[dict[str, Any]],
     out_dir: str,
@@ -90,7 +119,7 @@ def _precompute_embeddings(
     )
     t0 = time.time()
     model = _get_sentence_transformer()
-    embs = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    embs = _encode_with_chunking(texts, model)
     logger.info("Encoded %d embeddings in %.1fs, shape=%s", len(embs), time.time() - t0, embs.shape)
 
     emb_path = os.path.join(out_dir, "candidate_embeddings.npy")
@@ -152,7 +181,7 @@ def _compute_semantic_features(
 
     model = _get_sentence_transformer()
     jd_emb = model.encode([jd_text], show_progress_bar=False, normalize_embeddings=True)
-    candidate_embs = model.encode(all_texts, show_progress_bar=False, normalize_embeddings=True)
+    candidate_embs = _encode_with_chunking(all_texts, model)
     similarities = cosine_similarity(candidate_embs, jd_emb).flatten()
     return [float(s) for s in similarities]
 
@@ -332,9 +361,7 @@ def rank(
     if candidate_embs is None:
         logger.info("No precomputed embeddings — encoding %d candidates on the fly", n_total)
         cand_texts = ["passage: " + _get_candidate_text(c) for c in candidates]
-        candidate_embs = model.encode(
-            cand_texts, show_progress_bar=False, normalize_embeddings=True
-        )
+        candidate_embs = _encode_with_chunking(cand_texts, model)
     else:
         logger.info("Loaded precomputed embeddings: %s", candidate_embs.shape)
         if candidate_embs.shape[0] != n_total:
@@ -344,9 +371,7 @@ def rank(
                 n_total,
             )
             cand_texts = ["passage: " + _get_candidate_text(c) for c in candidates]
-            candidate_embs = model.encode(
-                cand_texts, show_progress_bar=False, normalize_embeddings=True
-            )
+            candidate_embs = _encode_with_chunking(cand_texts, model)
 
     dense_sims = cosine_similarity(jd_emb, candidate_embs).flatten()
     dense_ranks = scipy.stats.rankdata(-dense_sims, method="average")

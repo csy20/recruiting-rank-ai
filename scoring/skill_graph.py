@@ -1,3 +1,5 @@
+from flashtext import KeywordProcessor
+
 SKILL_GROUPS: dict[str, set[str]] = {
     "deep_learning_frameworks": {
         "pytorch",
@@ -722,19 +724,23 @@ for _concept, _terms in CONCEPT_GRAPH.items():
     for _term in _terms:
         CONCEPT_MAP[_term] = _concept
 
+_CONCEPT_KP: KeywordProcessor | None = None
+
+
+def _get_concept_processor() -> KeywordProcessor:
+    global _CONCEPT_KP
+    if _CONCEPT_KP is None:
+        kp = KeywordProcessor(case_sensitive=False)
+        for term, concept in CONCEPT_MAP.items():
+            kp.add_keyword(term, concept)
+        _CONCEPT_KP = kp
+    return _CONCEPT_KP
+
 
 def compute_concept_boost(jd_text: str, candidate_text: str) -> float:
-    jd_lower = jd_text.lower()
-    cand_lower = candidate_text.lower()
-
-    jd_concepts: set[str] = set()
-    cand_concepts: set[str] = set()
-
-    for term, concept in CONCEPT_MAP.items():
-        if term in jd_lower:
-            jd_concepts.add(concept)
-        if term in cand_lower:
-            cand_concepts.add(concept)
+    kp = _get_concept_processor()
+    jd_concepts: set[str] = set(kp.extract_keywords(jd_text))
+    cand_concepts: set[str] = set(kp.extract_keywords(candidate_text))
 
     if not jd_concepts:
         return 0.0
