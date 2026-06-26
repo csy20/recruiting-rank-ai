@@ -137,18 +137,20 @@ def _extract_experience_range(text: str) -> tuple[float, float]:
     for pattern in _EXPERIENCE_PATTERNS:
         for match in pattern.finditer(text):
             groups = match.groups()
-            if groups[0]:
-                if groups[1]:
-                    try:
-                        matches.append((float(groups[0]), float(groups[1])))
-                    except (ValueError, IndexError):
-                        pass
-                else:
-                    try:
-                        val = float(groups[0])
-                        matches.append((val, val + 2))
-                    except (ValueError, IndexError):
-                        pass
+            if not groups[0]:
+                continue
+            try:
+                lo = float(groups[0])
+            except (ValueError, TypeError):
+                continue
+            if groups[1] and groups[1].strip().replace(".", "", 1).lstrip("-").isdigit():
+                try:
+                    hi = float(groups[1])
+                except (ValueError, TypeError):
+                    hi = lo + 2
+                matches.append((lo, hi))
+            else:
+                matches.append((lo, lo + 2))
 
     if not matches:
         return (0.0, 20.0)
@@ -168,6 +170,22 @@ def get_jd_dimension_weights(jd_profile: dict[str, Any]) -> dict[str, float]:
             weights[dim] = cfg["weight"]
     total = sum(weights.values()) or 1
     return {k: v / total for k, v in weights.items()}
+
+
+def get_jd_skill_terms(jd_profile: dict[str, Any]) -> list[str]:
+    dim_analysis = jd_profile.get("dimension_analysis", {})
+    terms: set[str] = set()
+    for dim, info in dim_analysis.items():
+        if info.get("total_matches", 0) > 0:
+            cfg = JD_KEYWORDS.get(dim)
+            if cfg:
+                for t in cfg["terms"]:
+                    terms.add(t.lower())
+    if not terms:
+        for cfg in JD_KEYWORDS.values():
+            for t in cfg["terms"]:
+                terms.add(t.lower())
+    return list(terms)
 
 
 def get_jd_experience_score(exp_years: float, jd_profile: dict[str, Any]) -> float:

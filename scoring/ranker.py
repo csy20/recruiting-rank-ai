@@ -63,7 +63,6 @@ def _compute_technical_match(
         + t["depth_weight"] * depth_weighted
         + t["keyword_diversity_weight"] * keyword_diversity
     )
-    tech_match = min(tech_match, 1.0)
 
     sem_sim = features.get("semantic_similarity", 0.0)
     tech_match = 0.90 * tech_match + 0.10 * sem_sim
@@ -258,7 +257,11 @@ def compute_final_score(
 
     if ml_score is not None:
         ew = ENSEMBLE_WEIGHTS
-        score = ew["rule_based"] * score + ew["ml_prediction"] * ml_score * 100.0
+        total_ew = ew["rule_based"] + ew["ml_prediction"]
+        if total_ew > 0:
+            score = (ew["rule_based"] / total_ew) * score + (
+                ew["ml_prediction"] / total_ew
+            ) * ml_score * 100.0
 
     return score
 
@@ -270,38 +273,43 @@ def rank_candidates(
     ml_model: Any | None = None,
     signals_list: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, float, int, dict[str, float]]]:
-    results: list[tuple[str, float, dict[str, float]]] = []
+    raw: list[tuple[str, dict[str, float], float, float]] = []
 
     for i, (cid, feats) in enumerate(zip(candidate_ids, features_list, strict=True)):
         dim_scores = compute_dimension_scores(feats, jd_weights)
-        final_score = compute_final_score(dim_scores)
+        avail_mult = 1.0
         if signals_list and i < len(signals_list):
             avail_mult = compute_availability_multiplier(signals_list[i])
-            final_score *= avail_mult
+        disqual_cap = 100.0
         if feats.get("disq_consulting_only", 0.0) > 0.5:
-            final_score = min(final_score, 55.0)
+            disqual_cap = min(disqual_cap, 55.0)
         if feats.get("disq_title_chaser", 0.0) > 0.5:
-            final_score = min(final_score, 65.0)
+            disqual_cap = min(disqual_cap, 65.0)
         if feats.get("disq_wrong_domain", 0.0) > 0.5:
-            final_score = min(final_score, 50.0)
+            disqual_cap = min(disqual_cap, 50.0)
         if feats.get("disq_manager_no_code", 0.0) > 0.5:
-            final_score = min(final_score, 60.0)
-        results.append((cid, final_score, dim_scores))
+            disqual_cap = min(disqual_cap, 60.0)
+        raw.append((cid, dim_scores, avail_mult, disqual_cap))
 
+    ml_predictions: list[float] = []
     if ml_model is not None:
         feature_vectors = [_features_to_vector(f) for f in features_list]
         ml_predictions = ml_model.predict(np.array(feature_vectors))
-        for i, (cid, _, dim_scores) in enumerate(results):
-            ml_score = float(ml_predictions[i]) if i < len(ml_predictions) else None
-            if ml_score is not None:
-                ml_score = max(0.0, min(1.0, ml_score))
-            ensemble_score = compute_final_score(dim_scores, ml_score)
-            results[i] = (cid, ensemble_score, dim_scores)
 
-    results.sort(key=lambda x: (-x[1], x[0]))
+    final: list[tuple[str, float, dict[str, float]]] = []
+    for i, (cid, dim_scores, avail_mult, disqual_cap) in enumerate(raw):
+        ml_score = None
+        if ml_model is not None and i < len(ml_predictions):
+            ml_score = max(0.0, min(1.0, float(ml_predictions[i])))
+        score = compute_final_score(dim_scores, ml_score)
+        score *= avail_mult
+        score = min(score, disqual_cap)
+        final.append((cid, score, dim_scores))
+
+    final.sort(key=lambda x: (-x[1], x[0]))
 
     ranked: list[tuple[str, float, int, dict[str, float]]] = []
-    for rank_pos, (cid, score, dims) in enumerate(results, start=1):
+    for rank_pos, (cid, score, dims) in enumerate(final, start=1):
         ranked.append((cid, score, rank_pos, dims))
     return ranked
 
@@ -491,7 +499,7 @@ def audit_fairness(
             ]
             adv_mean = float(np.mean(adv_scores)) if adv_scores else 0.0
             disadv_mean = float(np.mean(disadv_scores)) if disadv_scores else 0.0
-            disparity = adv_mean - disadv_mean if adv_mean > 0 else 0.0
+            disparity = adv_mean - disadv_mean
             group_disparities[dim] = {
                 "advantaged_mean": round(adv_mean, 4),
                 "disadvantaged_mean": round(disadv_mean, 4),

@@ -26,8 +26,17 @@ def compute_feature_contributions(
         raw_contrib = dim_value * weight * 100.0
         contributions[dim_name] = round(raw_contrib, 2)
 
-    risk_weight = DIMENSION_WEIGHTS.get("risk_adjustment", 0.0)
-    contributions["risk_penalty"] = round(risk_dim * risk_weight * 100.0, 2)
+    pre_risk_total = sum(
+        dim_value * DIMENSION_WEIGHTS.get(dim_name, 0.0) * 100.0
+        for dim_name, dim_value, _ in [
+            ("technical_match", tech_dim, 0),
+            ("semantic_match", sem_dim, 0),
+            ("career_quality", career_dim, 0),
+            ("behavioral", beh_dim, 0),
+            ("retention", ret_dim, 0),
+        ]
+    )
+    contributions["risk_penalty"] = -round(pre_risk_total * (1.0 - risk_dim), 2)
 
     tech_contrib = contributions.get("technical_match", 0.0)
     core_portion = 0.50
@@ -66,8 +75,9 @@ def compute_feature_contributions(
     anti = features.get("anti_pattern_count", 0)
     contributions["risk_penalty_detail"] = round(-(risk_score * 20.0 + anti * 3.0), 2)
 
+    sem_weight = DIMENSION_WEIGHTS.get("jd_semantic_similarity", 0.10)
     sem_val = features.get("semantic_similarity", 0.0)
-    contributions["semantic_similarity"] = round(sem_val * 10.0, 2)
+    contributions["semantic_similarity"] = round(sem_val * sem_weight * 100.0, 2)
 
     total = sum(v for v in contributions.values() if v > 0)
     if total > 0:

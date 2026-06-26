@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from functools import lru_cache
 from re import Pattern
 
 _PROD_INDICATORS: list[Pattern] = [
@@ -28,6 +29,11 @@ def _make_boundary_pattern(keyword: str) -> Pattern:
 
 
 def compile_keyword_patterns(keywords: list[str]) -> list[Pattern]:
+    return _compile_patterns_cached(tuple(keywords))
+
+
+@lru_cache(maxsize=128)
+def _compile_patterns_cached(keywords: tuple[str, ...]) -> list[Pattern]:
     return [_make_boundary_pattern(kw) for kw in keywords]
 
 

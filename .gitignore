@@ -2,8 +2,15 @@ __pycache__/
 *.pyc
 *.pyo
 data/*.npz
+data/*.npy
 data/*.csv
+candidates.jsonl
+job_description.txt
 submission.csv
+submission.json
+submission_fairness_audit.json
+precompute_run.log
+report.md
 *.egg-info/
 dist/
 build/

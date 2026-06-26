@@ -23,6 +23,7 @@ from config import (
     SHORT_STINT_MONTHS,
     SKILL_CATEGORIES,
 )
+
 from scoring.skill_graph import compute_skill_breadth, compute_skill_match
 from utils.nlp_utils import (
     compile_keyword_patterns,
@@ -32,19 +33,57 @@ from utils.nlp_utils import (
     has_production_indicators,
 )
 
-_SKILL_CATEGORY_PATTERNS: dict[str, Any] = {
-    cat: compile_keyword_patterns(list(terms)) for cat, terms in SKILL_CATEGORIES.items()
-}
+_SKILL_CATEGORY_PATTERNS: dict[str, Any] | None = None
+_EDUCATION_LEVEL_PATTERNS: dict[str, Any] | None = None
+_EDUCATION_FIELD_PATTERNS: dict[str, Any] | None = None
+_CERT_PATTERNS: Any = None
 
-_EDUCATION_LEVEL_PATTERNS: dict[str, Any] = {
-    level: compile_keyword_patterns(info["keywords"]) for level, info in EDUCATION_PATTERNS.items()
-}
 
-_EDUCATION_FIELD_PATTERNS: dict[str, Any] = {
-    field: compile_keyword_patterns(info["keywords"]) for field, info in EDUCATION_FIELDS.items()
-}
+def _get_skill_cat_patterns() -> dict[str, Any]:
+    global _SKILL_CATEGORY_PATTERNS
+    if _SKILL_CATEGORY_PATTERNS is None:
+        _SKILL_CATEGORY_PATTERNS = {
+            cat: compile_keyword_patterns(list(terms)) for cat, terms in SKILL_CATEGORIES.items()
+        }
+    return _SKILL_CATEGORY_PATTERNS
 
-_CERT_PATTERNS = compile_keyword_patterns(CERTIFICATION_PATTERNS)
+
+def _get_edu_level_patterns() -> dict[str, Any]:
+    global _EDUCATION_LEVEL_PATTERNS
+    if _EDUCATION_LEVEL_PATTERNS is None:
+        _EDUCATION_LEVEL_PATTERNS = {
+            level: compile_keyword_patterns(info["keywords"])
+            for level, info in EDUCATION_PATTERNS.items()
+        }
+    return _EDUCATION_LEVEL_PATTERNS
+
+
+def _get_edu_field_patterns() -> dict[str, Any]:
+    global _EDUCATION_FIELD_PATTERNS
+    if _EDUCATION_FIELD_PATTERNS is None:
+        _EDUCATION_FIELD_PATTERNS = {
+            field: compile_keyword_patterns(info["keywords"])
+            for field, info in EDUCATION_FIELDS.items()
+        }
+    return _EDUCATION_FIELD_PATTERNS
+
+
+def _get_cert_patterns() -> Any:
+    global _CERT_PATTERNS
+    if _CERT_PATTERNS is None:
+        _CERT_PATTERNS = compile_keyword_patterns(CERTIFICATION_PATTERNS)
+    return _CERT_PATTERNS
+
+
+def _build_prestige_map() -> dict[str, float]:
+    m: dict[str, float] = {}
+    for info in COMPANY_TIERS.values():
+        for c in info.get("companies", set()):
+            m[c] = max(m.get(c, 0.0), info["score"])
+    return m
+
+
+_COMPANY_PRESTIGE = _build_prestige_map()
 
 _AI_TERMS = [
     "embedding",
@@ -268,16 +307,13 @@ def _analyze_career_history(candidate: dict[str, Any]) -> dict[str, Any]:
             if company in CONSULTING_WITH_ML_BOOKS:
                 has_ml_consulting = True
         else:
-            if role.get("is_current") or True:
-                if "services" not in industry:
-                    product_roles += 1
+            if "services" not in industry:
+                product_roles += 1
 
         score = sum(1 for kw in SENIORITY_KEYWORDS if kw.lower() in title.lower())
         seniority_counts.append(score)
 
-        for _tier_name, tier_info in COMPANY_TIERS.items():
-            if company in tier_info["companies"]:
-                max_prestige = max(max_prestige, tier_info["score"])
+        max_prestige = max(max_prestige, _COMPANY_PRESTIGE.get(company, 0.0))
 
     entirely_consulting = consulting_roles == role_count if role_count > 0 else False
     at_consulting = consulting_roles > 0
@@ -289,7 +325,7 @@ def _analyze_career_history(candidate: dict[str, Any]) -> dict[str, Any]:
     normalized_seniority = 0.0
     n = len(seniority_counts)
     if n >= 2:
-        increases = sum(1 for i in range(1, n) if seniority_counts[i] >= seniority_counts[i - 1])
+        increases = sum(1 for i in range(1, n) if seniority_counts[i] > seniority_counts[i - 1])
         progression = increases / (n - 1)
     if n > 0:
         normalized_seniority = min(sum(seniority_counts) / n / 2.0, 1.0)
@@ -370,17 +406,6 @@ def _compute_behavioral_score(signals: Any) -> dict[str, float]:
     gh = float(gh)
     components["github_activity_score"] = max(0.0, gh / 100.0) if gh >= 0 else 0.0
 
-    last_active = signals.get("last_active_date", "") or ""
-    if last_active:
-        try:
-            la_date = datetime.strptime(str(last_active)[:10], "%Y-%m-%d").date()
-            days_since = (REFERENCE_DATE - la_date).days
-            components["recent_activity"] = max(0.0, 1.0 - days_since / 365.0)
-        except (ValueError, TypeError):
-            components["recent_activity"] = 0.0
-    else:
-        components["recent_activity"] = 0.0
-
     pcs = float(signals.get("profile_completeness_score", 0) or 0)
     components["profile_completeness"] = min(pcs / 100.0, 1.0)
 
@@ -403,19 +428,26 @@ def _compute_behavioral_score(signals: Any) -> dict[str, float]:
     components["connection_density"] = min(connections / 500.0, 1.0)
 
     last_active = signals.get("last_active_date", "") or ""
-    recency = 1.0
+    la_date = None
+    days_since = 9999
     if last_active:
         try:
             la_date = datetime.strptime(str(last_active)[:10], "%Y-%m-%d").date()
             days_since = (REFERENCE_DATE - la_date).days
-            if days_since > 180:
-                recency = 0.45
-            elif days_since > 90:
-                recency = 0.70
-            elif days_since > 45:
-                recency = 0.85
         except (ValueError, TypeError):
+            pass
+    components["recent_activity"] = max(0.0, 1.0 - days_since / 365.0) if la_date else 0.0
+
+    recency = 1.0
+    if la_date:
+        if days_since > 180:
             recency = 0.45
+        elif days_since > 90:
+            recency = 0.70
+        elif days_since > 45:
+            recency = 0.85
+    else:
+        recency = 0.45
     rrr = min(float(components.get("recruiter_response_rate", 0)), 1.0)
     o2w = 1.0 if signals.get("open_to_work_flag", False) else 0.65
     notice_raw = signals.get("notice_period_days", 30)
@@ -456,12 +488,10 @@ def _compute_retention_score(candidate: dict[str, Any], career: dict[str, Any]) 
         notice_period = float(notice_period_str) if notice_period_str is not None else 30.0
     except (ValueError, TypeError):
         notice_period = 30.0
-    if notice_period < 30:
-        notice_period = 30.0
-    notice_score = max(0.0, 1.0 - (notice_period - 30) / 150.0)
+    notice_period = max(notice_period, 0.0)
+    notice_score = max(0.0, 1.0 - notice_period / 180.0)
 
-    stability_score = max(0.0, 1.0 - job_hop_penalty)
-    overall = max(0.0, min(1.0, 0.6 * tenure_score + 0.4 * stability_score - job_hop_penalty))
+    overall = max(0.0, min(1.0, 0.6 * tenure_score + 0.4 * (1.0 - job_hop_penalty)))
 
     return {
         "tenure_score": tenure_score,
@@ -578,13 +608,13 @@ def _detect_education(candidate: dict[str, Any]) -> dict[str, float]:
             text += " " + ((skill.get("name") or "") or "").lower()
 
     detected_level = 0.0
-    for level, patterns in _EDUCATION_LEVEL_PATTERNS.items():
+    for level, patterns in _get_edu_level_patterns().items():
         if count_pattern_matches(text, patterns) > 0:
             level_info = EDUCATION_PATTERNS.get(level, {})
             detected_level = max(detected_level, level_info.get("score", 0.0))
 
     detected_field = 0.0
-    for field, patterns in _EDUCATION_FIELD_PATTERNS.items():
+    for field, patterns in _get_edu_field_patterns().items():
         if count_pattern_matches(text, patterns) > 0:
             field_info = EDUCATION_FIELDS.get(field, {})
             detected_field = max(detected_field, field_info.get("score", 0.0))
@@ -596,13 +626,13 @@ def _detect_education(candidate: dict[str, Any]) -> dict[str, float]:
 
 
 def _detect_certifications(text: str) -> float:
-    return float(count_pattern_matches(text, _CERT_PATTERNS))
+    return float(count_pattern_matches(text, _get_cert_patterns()))
 
 
 def _compute_skill_categories(skills: list[str]) -> dict[str, float]:
     result = {}
     combined = " ".join(skills)
-    for category, patterns in _SKILL_CATEGORY_PATTERNS.items():
+    for category, patterns in _get_skill_cat_patterns().items():
         result[f"skill_cat_{category}"] = float(count_pattern_matches(combined, patterns))
     return result
 
@@ -622,7 +652,7 @@ def _compute_growth_rate(career: dict[str, Any]) -> float:
     years = total_months / 12.0
     if years <= 0:
         return 0.5
-    return min(seniority * 2.0 / years, 1.0)
+    return min(seniority * 2.0 / (1.0 + years * 0.15), 1.0)
 
 
 def _check_date_overlap(roles: list[dict]) -> bool:
@@ -690,6 +720,30 @@ def detect_honeypot_signals(candidate: dict[str, Any]) -> float:
     return min(score, 1.0)
 
 
+def _recent_roles(roles: list, years: int = 8) -> list:
+    from datetime import datetime as _dt
+
+    cutoff = REFERENCE_DATE.replace(year=REFERENCE_DATE.year - years)
+    recent = []
+    for r in roles:
+        if not isinstance(r, dict):
+            continue
+        start = r.get("start_date") or ""
+        if start:
+            try:
+                sd = _dt.strptime(str(start)[:10], "%Y-%m-%d").date()
+                if sd >= cutoff:
+                    recent.append(r)
+                    continue
+            except (ValueError, TypeError):
+                pass
+        if r.get("is_current"):
+            recent.append(r)
+        elif not start and (r.get("duration_months", 0) or 0) > 0:
+            recent.append(r)
+    return recent or [r for r in roles if isinstance(r, dict)]
+
+
 def detect_disqualifiers(
     candidate: dict[str, Any],
 ) -> dict[str, bool]:
@@ -702,14 +756,14 @@ def detect_disqualifiers(
     roles = candidate.get("career_history") or []
     profile = candidate.get("profile") or {}
 
-    recent_roles = [r for r in roles if isinstance(r, dict)]
+    recent_roles = _recent_roles(roles)
     if len(recent_roles) >= 3:
         avg_dur = sum(r.get("duration_months", 0) or 0 for r in recent_roles) / len(recent_roles)
         if avg_dur < 18:
             result["title_chaser"] = True
 
     companies = set()
-    for r in recent_roles:
+    for r in roles:
         c = (r.get("company", "") or "").lower().strip()
         if c:
             companies.add(c)
@@ -784,7 +838,10 @@ def _extract_production_signals(candidate: dict[str, Any]) -> float:
     return min(density, 1.0)
 
 
-def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
+def extract_all_features(
+    candidate: dict[str, Any],
+    jd_skills: list[str] | None = None,
+) -> dict[str, float]:
     if not isinstance(candidate, dict):
         return {}
 
@@ -862,9 +919,12 @@ def extract_all_features(candidate: dict[str, Any]) -> dict[str, float]:
     features["certifications"] = certifications
     features.update(skill_cats)
 
-    jd_required_skills = list(
-        {term.lower() for dim in JD_KEYWORDS.values() for term in dim["terms"]}
-    )
+    if jd_skills is not None:
+        jd_required_skills = jd_skills
+    else:
+        jd_required_skills = list(
+            {term.lower() for dim in JD_KEYWORDS.values() for term in dim["terms"]}
+        )
     skill_match_score, exact_matches, transferable_matches = compute_skill_match(
         skills,
         jd_required_skills,

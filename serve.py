@@ -13,7 +13,7 @@ from config import API_CONFIG, API_HOST, API_PORT
 from features.extractor import extract_all_features
 from rank import _compute_semantic_features, _get_candidate_text
 from scoring.explainer import explain_ranking
-from scoring.jd_parser import get_jd_dimension_weights, parse_jd
+from scoring.jd_parser import get_jd_dimension_weights, get_jd_skill_terms, parse_jd
 from scoring.ranker import (
     audit_fairness,
     calibrate_scores,
@@ -104,24 +104,36 @@ def rank_endpoint(req: RankRequest):
             detail=f"Too many candidates (max {max_candidates})",
         )
 
+    jd_weights = None
+    jd_skills = None
+    jd_profile = None
+    if req.jd_text:
+        jd_profile = parse_jd(req.jd_text)
+        jd_weights = get_jd_dimension_weights(jd_profile)
+        jd_skills = get_jd_skill_terms(jd_profile)
+        logger.info(
+            "JD parsed: %d dimensions, exp range: %s, %d skill terms",
+            len(jd_weights),
+            jd_profile.get("experience_years"),
+            len(jd_skills),
+        )
+
     ids: list[str] = []
     all_features: list[dict[str, float]] = []
     for c in req.candidates:
         cid = c.get("candidate_id") or f"cand_{len(ids)}"
         ids.append(cid)
-        all_features.append(extract_all_features(c))
+        all_features.append(extract_all_features(c, jd_skills=jd_skills))
 
-    jd_weights = None
     if req.jd_text:
-        jd_profile = parse_jd(req.jd_text)
-        jd_weights = get_jd_dimension_weights(jd_profile)
-        logger.info(
-            "JD parsed: %d dimensions, exp range: %s",
-            len(jd_weights),
-            jd_profile.get("experience_years"),
-        )
         candidate_texts = [_get_candidate_text(c) for c in req.candidates]
         semantic_scores = _compute_semantic_features(req.candidates, candidate_texts, req.jd_text)
+        if len(semantic_scores) != len(all_features):
+            logger.warning(
+                "semantic_scores length %d != candidates %d, truncating",
+                len(semantic_scores),
+                len(all_features),
+            )
         for i, sim in enumerate(semantic_scores):
             if i < len(all_features):
                 all_features[i]["semantic_similarity"] = sim
@@ -168,6 +180,10 @@ def rank_endpoint(req: RankRequest):
 def score_single(candidate: dict[str, Any], jd_text: str | None = None):
     _check_rate_limit()
     feats = extract_all_features(candidate)
+    if jd_text:
+        sims = _compute_semantic_features([candidate], [_get_candidate_text(candidate)], jd_text)
+        if len(sims) == 1:
+            feats["semantic_similarity"] = sims[0]
     dims = compute_dimension_scores(feats)
     jd_weights = None
     if jd_text:
