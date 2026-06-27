@@ -362,12 +362,17 @@ api:
 │   └── nlp_utils.py        Word-boundary regex matching, TF-IDF helpers
 │
 ├── tests/
-│   ├── test_extractor.py   34 tests — feature extraction pipeline
-│   ├── test_nlp_utils.py   18 tests — NLP utility functions
-│   ├── test_ranker.py      23 tests — scoring, ranking, calibration, JD parser
-│   ├── test_skill_graph.py 12 tests — graph building, skill matching
-│   ├── test_explainer.py    6 tests — feature contributions, reasoning
-│   └── test_serve.py       12 tests — API endpoints, validation
+│   ├── test_extractor.py       34 tests — feature extraction pipeline
+│   ├── test_nlp_utils.py       18 tests — NLP utility functions
+│   ├── test_ranker.py          23 tests — scoring, ranking, calibration, JD parser
+│   ├── test_skill_graph.py     12 tests — graph building, skill matching
+│   ├── test_explainer.py        6 tests — feature contributions, reasoning
+│   ├── test_serve.py           12 tests — API endpoints, validation
+│   ├── test_models.py          20 tests — Pydantic model validation
+│   ├── test_integration.py      4 tests — full pipeline integration
+│   ├── test_oracle_ranking.py   9 tests — ranking invariants & oracle tests
+│   ├── test_rank_embeddings.py  4 tests — embedding loading validation
+│   └── test_rank_encoding.py    1 test  — encoding chunking logic
 │
 ├── data/                   Precomputed features and model cache
 ├── .github/workflows/      CI pipeline (ruff lint + pytest + docker build)
@@ -467,11 +472,29 @@ make format    # format code
 
 ## Testing
 
+### Test Suite
+
+13 test files with 140+ tests covering all components:
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `test_extractor.py` | 34 | Feature extraction (all 30+ extractors, edge cases) |
+| `test_ranker.py` | 23 | Scoring, ranking, calibration, JD parser, audit |
+| `test_nlp_utils.py` | 18 | NLP utilities (pattern matching, phrase extraction) |
+| `test_skill_graph.py` | 12 | Graph building, BFS, skill matching, concept boost |
+| `test_serve.py` | 12 | API endpoints (health, rank, score, audit) |
+| `test_models.py` | 20 | Pydantic model validation, field parsing, defaults |
+| `test_oracle_ranking.py` | 9 | Ranking invariants (monotonicity, determinism, caps) |
+| `test_explainer.py` | 6 | Feature contributions, reasoning generation |
+| `test_integration.py` | 4 | Full pipeline: JSONL → ranked CSV |
+| `test_rank_embeddings.py` | 4 | Embedding loading, validation, error handling |
+| `test_rank_encoding.py` | 1 | Encoding chunking for long texts |
+
 ```bash
-# Full test suite (103+ tests)
+# Full test suite
 python3 -m pytest tests/ -v
 
-# With coverage
+# With coverage report
 python3 -m pytest tests/ --cov=. --cov-report=term-missing
 
 # Individual modules
@@ -481,4 +504,8 @@ python3 -m pytest tests/test_skill_graph.py -v
 python3 -m pytest tests/test_explainer.py -v
 python3 -m pytest tests/test_serve.py -v
 python3 -m pytest tests/test_nlp_utils.py -v
+python3 -m pytest tests/test_models.py -v
+python3 -m pytest tests/test_integration.py -v
+python3 -m pytest tests/test_oracle_ranking.py -v
+python3 -m pytest tests/test_rank_embeddings.py -v
 ```
